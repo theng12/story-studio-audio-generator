@@ -54,16 +54,17 @@ Recon against the logged-in studio settled the design — it's **fully
 API-driven**, no DOM scraping, no polling:
 
 1. **Auth** — the studio authorizes with `Authorization: Bearer <token>`,
-   where the token is `localStorage.token` on any fish.audio page.
-2. **reCAPTCHA** — every generation carries a fresh reCAPTCHA Enterprise
-   token. We mint our own with the page's site key + action `"tts"`. This is
-   the *only* reason a fish.audio tab must be open: `grecaptcha` lives in the
-   page's MAIN world.
-3. **Generate** — `POST https://api.fish.audio/task` with
-   `{ type:"tts", stream:true, model, prosody, latency, parameters:{…}, recaptcha }`.
+   where the token is `localStorage.token` on any fish.audio page. A
+   logged-in fish.audio tab must be open because that's where the token lives
+   *and* because `api.fish.audio` only accepts the request from the fish.audio
+   origin — so the call runs from a content script on the page.
+2. **Generate** — `POST https://api.fish.audio/task` with
+   `{ type:"tts", stream:true, model, prosody, latency, parameters:{…} }`.
    With `stream:true` the response *is* the MP3 (`application/octet-stream`),
    so there's nothing to poll — we get the bytes back in one request.
-4. **Voices** — `GET https://api.fish.audio/model?self=true` lists the user's
+   (Fish's web app also sends a reCAPTCHA token, but the API does **not**
+   enforce it for an authenticated request — verified live — so we skip it.)
+3. **Voices** — `GET https://api.fish.audio/model?self=true` lists the user's
    own voices (`_id` = the `model_id` to pass).
 
 Because `grecaptcha` is main-world only and `chrome.*` is isolated-world only,
@@ -71,7 +72,7 @@ two content scripts cooperate:
 
 | File | World | Role |
 |---|---|---|
-| `src/content/fish-main.js` | MAIN | mint reCAPTCHA, call the Fish API, return MP3 bytes |
+| `src/content/fish-main.js` | MAIN | read the token, call the Fish API, return MP3 bytes |
 | `src/content/fish.js` | isolated | bridge `chrome.runtime` ⇄ main world via `postMessage` |
 
 Limit: one generation is capped at 15 000 characters (enforced with a clear

@@ -1,19 +1,16 @@
 // MAIN-world script injected into fish.audio.
 //
-// Why MAIN world: the only protected step is the per-request reCAPTCHA token,
-// which is minted by the page's own `grecaptcha.enterprise` — a main-world
-// object an isolated content script cannot reach. So this script owns the
-// Fish API calls; the isolated `fish.js` bridges it to the extension via
-// window.postMessage (this world has no chrome.* APIs).
+// Why MAIN world: `api.fish.audio` only accepts the generate/voices calls from
+// the fish.audio page origin. Running here makes our fetches indistinguishable
+// from Fish's own app code (same origin, same `localStorage.token`), so they're
+// accepted. This script owns the Fish API calls; the isolated `fish.js` bridges
+// it to the extension via window.postMessage (this world has no chrome.* APIs).
 //
 // Everything here was verified live against the logged-in studio:
 //   - Auth:   Authorization: Bearer <localStorage.token>
 //   - Voices: GET  https://api.fish.audio/model?self=true
 //   - TTS:    POST https://api.fish.audio/task  (stream:true)
 //             → returns the MP3 bytes directly (application/octet-stream).
-//
-// The studio also passes a fresh reCAPTCHA token on every generate; we mint
-// our own with the page's site key + action "tts".
 
 (() => {
   const API = 'https://api.fish.audio';
@@ -22,45 +19,10 @@
 
   const token = () => localStorage.getItem('token') || '';
 
-  // Fish.audio's public reCAPTCHA Enterprise site key. It's a PUBLIC value
-  // (shipped to every visitor in the recaptcha script URL), not a secret.
-  // Used as the fallback when the page hasn't loaded reCAPTCHA yet — which is
-  // the common case, because Fish loads it lazily only when you click its own
-  // "Generate Speech". We can't wait for that, so we load it ourselves.
-  const FALLBACK_SITE_KEY = '6LfR4RwqAAAAAEvptRw9zohw7HeDU6NCqtAnJk1i';
-
-  // Prefer a key already on the page (survives a Fish key rotation); else the
-  // known public key.
-  function siteKey() {
-    for (const s of document.querySelectorAll('script[src]')) {
-      const m = s.src.match(/[?&]render=([\w-]+)/);
-      if (m) return m[1];
-    }
-    return FALLBACK_SITE_KEY;
-  }
-
-  // Ensure grecaptcha.enterprise is available, injecting the Enterprise script
-  // ourselves if Fish hasn't lazy-loaded it yet.
-  function ensureRecaptcha(key) {
-    if (window.grecaptcha && window.grecaptcha.enterprise) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = `https://www.google.com/recaptcha/enterprise.js?render=${key}`;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error('Failed to load reCAPTCHA. Check your connection.'));
-      document.head.appendChild(s);
-    });
-  }
-
-  async function recaptcha(action) {
-    const key = siteKey();
-    await ensureRecaptcha(key);
-    const g = (window.grecaptcha && window.grecaptcha.enterprise) || window.grecaptcha;
-    if (!g) throw new Error('grecaptcha unavailable after load.');
-    return new Promise((resolve, reject) => {
-      g.ready(() => g.execute(key, { action }).then(resolve).catch(reject));
-    });
-  }
+  // NOTE: Fish's web app sends a reCAPTCHA token on every generate, but the
+  // /task API does NOT enforce it for an authenticated (Bearer-token) request
+  // — verified live: a correct body with no recaptcha field returns the MP3
+  // with status 200. So we don't mint one; the localStorage token is enough.
 
   async function listVoices() {
     const r = await fetch(`${API}/model?self=true&page_size=50`, {
@@ -81,7 +43,6 @@
     if (text.length > 15000) {
       throw new Error(`Text is ${text.length} chars; fish.audio caps one generation at 15000. Split this chapter.`);
     }
-    const rc = await recaptcha('tts');
     const prosody = { speed, volume, normalize_loudness: true };
     const body = {
       type: 'tts',
@@ -99,7 +60,6 @@
         sampler: { temperature: 1, top_p: 0.9 },
         normalize: false,
       },
-      recaptcha: rc,
     };
     const r = await fetch(`${API}/task`, {
       method: 'POST',
