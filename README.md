@@ -85,10 +85,20 @@ error). Splitting long chapters and stitching the parts is a follow-up.
 
 ## Companion mode behaviour
 
-- **Only shows what needs audio.** Projects, episodes, and chapters are
-  filtered to "script is done, audio is missing": episodes use the Story Studio
-  `status` flags (`script && !audio`); chapters/intro come from the episode's
-  `audio-status` `missing_files`, so anything already voiced is hidden.
+- **Only shows what needs audio.** Within a project, episodes are filtered to
+  "script done, audio missing" (`status.script && !status.audio`), and the
+  chapter/intro dropdown comes from the episode's `audio-status` `missing_files`
+  — so anything already voiced is hidden, and a section drops off the list the
+  moment its audio is saved.
+- **Fast to open.** The popup no longer scans every project up front (slow on
+  large projects). It lists projects cheaply and lazily loads only the selected
+  project's episodes, cached for 5 minutes (and invalidated after you generate).
+- **Doesn't lose progress.** Generation runs in the service worker and writes
+  its status to storage, so closing and reopening the popup shows the live
+  `(n/total)` progress or the final result — the work keeps going either way.
+  (Note: because the extension calls Fish's API directly, generations do **not**
+  appear in the fish.audio web editor or its history — that's expected; the
+  saved audio file is the result.)
 - **Introduction included.** Episodes with an intro section show an
   **Introduction** entry (saved as `{CODE}_Introduction.mp3`), alongside the
   chapters.

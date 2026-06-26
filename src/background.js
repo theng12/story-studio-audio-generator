@@ -112,10 +112,28 @@ async function generateAndSave(job, settings, tab) {
   return { ok: true, downloadId, savedAs: filename, target: 'download' };
 }
 
+// Persist the latest status to storage so the popup can show it even after
+// being closed and reopened (the work continues in the worker regardless).
+async function writeStatus(text, kind = 'info') {
+  try {
+    await chrome.storage.local.set({ lastStatus: { text, kind, ts: Date.now() } });
+  } catch {
+    /* best-effort */
+  }
+}
+
 async function runJob(job) {
   const settings = await getSettings();
   const tab = await ensureFishTab();
-  return generateAndSave(job, settings, tab);
+  await writeStatus(`Generating ${job.label || 'audio'}…`, 'running');
+  try {
+    const r = await generateAndSave(job, settings, tab);
+    await writeStatus(`✓ Saved ${r.savedAs}`, 'done');
+    return r;
+  } catch (e) {
+    await writeStatus(`✗ ${job.label || 'audio'}: ${e.message || e}`, 'error');
+    throw e;
+  }
 }
 
 // Best-effort progress ping to the popup (no-op if it's closed).
@@ -145,6 +163,7 @@ async function runBatch(batch) {
     const ch = batch.chapters[i];
     const label = ch.label || ch.slug || `Chapter ${ch.chapterNumber}`;
     emit({ type: 'batchProgress', index: i, total, label, state: 'running' });
+    await writeStatus(`(${i + 1}/${total}) generating ${label}…`, 'running');
     try {
       const job = {
         text: ch.text,
@@ -170,6 +189,8 @@ async function runBatch(batch) {
     if (i < total - 1) await sleep(politeGap());
   }
 
+  const tail = total - succeeded ? ` (${total - succeeded} failed)` : '';
+  await writeStatus(`✓ Done: ${succeeded}/${total} saved${tail}.`, 'done');
   return { ok: true, total, succeeded, failed: total - succeeded, results };
 }
 

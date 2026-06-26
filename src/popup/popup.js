@@ -41,11 +41,18 @@ async function init() {
   $('autoTag').checked = !!settings.autoTag;
   $('autoTag').addEventListener('change', () => persist({ autoTag: $('autoTag').checked }));
 
+  // Show the last status (a generation that's still running, or its result),
+  // and keep it live — so closing/reopening the popup doesn't lose progress.
+  const { lastStatus } = await chrome.storage.local.get('lastStatus');
+  if (lastStatus && Date.now() - lastStatus.ts < 30 * 60 * 1000) status(lastStatus.text);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.lastStatus) status(changes.lastStatus.newValue?.text || '');
+  });
+
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
     $('generateAll').hidden = false;
     $('generateAll').addEventListener('click', onGenerateAll);
-    chrome.runtime.onMessage.addListener(onBatchProgress);
     await initCompanion();
   } else {
     $('pastePane').hidden = false;
@@ -95,44 +102,53 @@ async function initCompanion() {
   }
 }
 
-// Load every project's episodes once, then show only projects that have at
-// least one episode needing audio.
-async function loadCompanionData() {
-  status('Scanning projects…');
-  const projects = await client.listProjects();
-  await Promise.all(
-    projects.map(async (p) => {
-      try {
-        const raw = await client.listEpisodes(p.slug);
-        episodesByProject[p.slug] = Array.isArray(raw) ? raw : raw.episodes || [];
-      } catch {
-        episodesByProject[p.slug] = [];
-      }
-    })
-  );
+// Per-project episode list cache (storage). Avoids re-scanning large projects
+// on every popup open. Fresh for EP_TTL; invalidated after we generate audio.
+const EP_TTL = 5 * 60 * 1000;
 
-  const eligible = projects.filter((p) => (episodesByProject[p.slug] || []).some(isEligible));
+async function fetchEpisodes(slug, force = false) {
+  if (!force) {
+    const { epCache = {} } = await chrome.storage.local.get('epCache');
+    const hit = epCache[slug];
+    if (hit && Date.now() - hit.ts < EP_TTL) return hit.episodes;
+  }
+  const raw = await client.listEpisodes(slug);
+  const episodes = Array.isArray(raw) ? raw : raw.episodes || [];
+  const { epCache = {} } = await chrome.storage.local.get('epCache');
+  epCache[slug] = { ts: Date.now(), episodes };
+  await chrome.storage.local.set({ epCache });
+  return episodes;
+}
+
+async function invalidateEpisodes(slug) {
+  const { epCache = {} } = await chrome.storage.local.get('epCache');
+  delete epCache[slug];
+  await chrome.storage.local.set({ epCache });
+}
+
+// Populate the project dropdown (cheap — just a manifest read) and lazily load
+// episodes for the selected project only. No more scanning every project.
+async function loadCompanionData() {
+  const projects = await client.listProjects();
   const sel = $('project');
   sel.innerHTML = '';
-  for (const p of eligible) {
+  for (const p of projects) {
     const opt = document.createElement('option');
     opt.value = p.slug;
     opt.textContent = p.name || p.slug;
     sel.appendChild(opt);
   }
-  if (!eligible.length) {
-    status('No episodes need audio — every script already has its audio. 🎉');
+  if (!projects.length) {
+    status('No projects found.');
     return;
   }
-  // Restore last-used project if it's still eligible.
-  if (settings.lastProject && eligible.some((p) => p.slug === settings.lastProject)) {
+  if (settings.lastProject && projects.some((p) => p.slug === settings.lastProject)) {
     sel.value = settings.lastProject;
   }
   sel.onchange = () => {
     persist({ lastProject: sel.value });
     loadEpisodes();
   };
-  status('');
   await loadEpisodes();
 }
 
@@ -140,6 +156,8 @@ async function loadEpisodes() {
   const slug = $('project').value;
   ctx.projectSlug = slug;
   ctx.project = $('project').selectedOptions[0]?.textContent || slug;
+  status('Loading episodes…');
+  episodesByProject[slug] = await fetchEpisodes(slug);
   const eps = (episodesByProject[slug] || []).filter(isEligible);
   const sel = $('episode');
   sel.innerHTML = '';
@@ -159,7 +177,14 @@ async function loadEpisodes() {
     persist({ lastEpisode: sel.value });
     loadSections();
   };
-  if (eps.length) await loadSections();
+  if (eps.length) {
+    status('');
+    await loadSections();
+  } else {
+    $('chapter').innerHTML = '';
+    updatePreview();
+    status('No episodes in this project need audio. 🎉');
+  }
 }
 
 // Build the chapter/intro dropdown from the episode's MISSING audio files.
@@ -235,13 +260,6 @@ async function sectionText(kind, num) {
 }
 
 // ── Batch: generate all missing sections ────────────────────────────────────
-function onBatchProgress(msg) {
-  if (msg?.type !== 'batchProgress') return;
-  const n = msg.index + 1;
-  if (msg.state === 'running') status(`(${n}/${msg.total}) generating ${msg.label}…`);
-  else if (msg.state === 'failed') status(`(${n}/${msg.total}) ${msg.label} failed: ${msg.error}`);
-}
-
 async function onGenerateAll() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
@@ -282,7 +300,9 @@ async function onGenerateAll() {
     });
     if (result?.ok) {
       const tail = result.failed ? ` (${result.failed} failed)` : '';
-      status(`Done: ${result.succeeded}/${result.total} saved${tail}.`);
+      await invalidateEpisodes(ctx.projectSlug);
+      await loadSections();
+      status(`✓ Done: ${result.succeeded}/${result.total} saved${tail}.`);
     } else {
       status(`Batch failed: ${result?.error || 'unknown error'}`);
     }
@@ -365,14 +385,17 @@ async function onGenerate() {
   let text;
   let sectionSlug = '';
   let chapterNumber = '';
+  let label = '';
   const tokens = currentTokens();
   if (settings.mode === 'paste') {
     text = $('pasteText').value.trim();
+    label = $('pasteLabel').value.trim() || $('pasteCode').value.trim() || 'audio';
   } else {
     const opt = $('chapter').selectedOptions[0];
     if (!opt) return status('Nothing to generate — no missing audio.');
     sectionSlug = opt.value;
     chapterNumber = opt.dataset.num || '';
+    label = opt.dataset.label || sectionSlug;
     status('Loading script text…');
     text = await sectionText(opt.dataset.kind, opt.dataset.num);
   }
@@ -380,7 +403,7 @@ async function onGenerate() {
 
   persist({ fishVoice: voice, saveTarget: target });
 
-  const job = { text, voice, target, autoTag };
+  const job = { text, voice, target, autoTag, label };
   if (target === 'project') {
     job.slug = ctx.projectSlug;
     job.episodeCode = ctx.episodeCode;
@@ -390,10 +413,18 @@ async function onGenerate() {
     job.downloadPath = buildDownloadPath(settings, tokens);
   }
 
-  status(target === 'project' ? 'Generating + saving to project…' : 'Generating on fish.audio…');
+  setBusy(true);
+  status(target === 'project' ? `Generating ${label}…` : 'Generating on fish.audio…');
   const result = await chrome.runtime.sendMessage({ type: 'runJob', job });
+  setBusy(false);
   if (result?.ok) {
-    status(target === 'project' ? `Saved to project: ${result.savedAs}` : `Saved: ${result.savedAs}`);
+    // Refresh the section list so the one we just made drops off the list,
+    // then show the success message (loadSections clears the status line).
+    if (settings.mode === 'companion') {
+      await invalidateEpisodes(ctx.projectSlug);
+      await loadSections();
+    }
+    status(target === 'project' ? `✓ Saved to project: ${result.savedAs}` : `✓ Saved: ${result.savedAs}`);
   } else {
     status(`Failed: ${result?.error || 'unknown error'}`);
   }
