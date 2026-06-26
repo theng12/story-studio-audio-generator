@@ -2,30 +2,31 @@
 //
 // Flow:
 //   popup → background { type: "runJob", job }
-//   background → fish.audio content script { type: "fish:generate", text, voice }
-//   content script → background { audio: <base64>, mime }
-//   background → chrome.downloads.download({ filename: job.downloadPath })
+//   background → fish.audio content bridge { type: "fish:generate", text, voice }
+//   bridge → MAIN world → POST api.fish.audio/task (stream) → MP3 bytes
+//   bridge → background { base64, mime }
+//   background → chrome.downloads.download(data: URL, filename: job.downloadPath)
 //
-// The Fish step is isolated behind the "fish:generate" message so that
-// however we end up driving fish.audio (direct API call vs DOM automation),
-// nothing else in the pipeline changes.
+// The Fish step is isolated behind "fish:generate" / "fish:listVoices", so the
+// rest of the pipeline doesn't care how fish.audio is driven.
 
 import { getSettings } from './lib/config.js';
 
-const FISH_URL = 'https://fish.audio/';
+const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
 
-// Find an existing fish.audio tab or open one, and make sure it has finished
-// loading so the content script is live.
+// Find a usable fish.audio tab (must be an /app page so grecaptcha is loaded),
+// or open one in the background and wait for it to finish loading.
 async function ensureFishTab() {
   const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
-  if (tabs.length) return tabs[0];
-  const tab = await chrome.tabs.create({ url: FISH_URL, active: false });
-  // Wait for load complete.
+  const ready = tabs.find((t) => t.status === 'complete');
+  if (ready) return ready;
+  const tab = tabs[0] || (await chrome.tabs.create({ url: FISH_APP_URL, active: false }));
   await new Promise((resolve) => {
     const listener = (tabId, info) => {
       if (tabId === tab.id && info.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
+        // Give the content scripts + grecaptcha a beat to initialise.
+        setTimeout(resolve, 800);
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
@@ -33,30 +34,40 @@ async function ensureFishTab() {
   return tab;
 }
 
+async function send(tabId, message) {
+  const res = await chrome.tabs.sendMessage(tabId, message);
+  if (!res || !res.ok) throw new Error(res?.error || 'No response from fish.audio.');
+  return res;
+}
+
 async function runJob(job) {
   const settings = await getSettings();
+  const voice = job.voice || settings.fishVoice;
+  if (!voice) throw new Error('No fish.audio voice selected. Pick one in Settings.');
   const tab = await ensureFishTab();
 
-  // Ask the content script to generate audio for this text.
-  const result = await chrome.tabs.sendMessage(tab.id, {
+  const { base64, mime } = await send(tab.id, {
     type: 'fish:generate',
     text: job.text,
-    voice: job.voice || settings.fishVoice || '',
+    voice,
+    speed: job.speed ?? 1,
   });
 
-  if (!result || !result.ok) {
-    throw new Error(result?.error || 'Fish generation failed (no audio returned).');
-  }
-
-  // result.audioUrl is a data: or blob: URL the content script produced.
+  const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
+  const filename = job.downloadPath.replace(/\.(mp3|wav)$/i, '') + `.${ext}`;
   const downloadId = await chrome.downloads.download({
-    url: result.audioUrl,
-    filename: job.downloadPath,
+    url: `data:${mime};base64,${base64}`,
+    filename,
     saveAs: false,
     conflictAction: 'uniquify',
   });
+  return { ok: true, downloadId, savedAs: filename };
+}
 
-  return { ok: true, downloadId, savedAs: job.downloadPath };
+async function listVoices() {
+  const tab = await ensureFishTab();
+  const { voices } = await send(tab.id, { type: 'fish:listVoices' });
+  return { ok: true, voices };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -64,7 +75,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     runJob(msg.job)
       .then((r) => sendResponse(r))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
-    return true; // async response
+    return true;
+  }
+  if (msg?.type === 'listVoices') {
+    listVoices()
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
   }
   return false;
 });

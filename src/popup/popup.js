@@ -1,4 +1,4 @@
-import { getSettings } from '../lib/config.js';
+import { getSettings, saveSettings } from '../lib/config.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { buildDownloadPath } from '../lib/naming.js';
 
@@ -15,6 +15,8 @@ async function init() {
   settings = await getSettings();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('generate').addEventListener('click', onGenerate);
+  $('loadVoices').addEventListener('click', loadVoices);
+  await initVoices();
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
@@ -116,6 +118,34 @@ async function loadChapters() {
   updatePreview();
 }
 
+// ── Voices ─────────────────────────────────────────────────────────────────
+function renderVoices(voices) {
+  const sel = $('voice');
+  sel.innerHTML = '';
+  for (const v of voices) {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.title || v.id;
+    sel.appendChild(opt);
+  }
+  if (settings.fishVoice) sel.value = settings.fishVoice;
+}
+
+async function initVoices() {
+  const { voices } = await chrome.storage.local.get('voices');
+  if (Array.isArray(voices) && voices.length) renderVoices(voices);
+  else await loadVoices();
+}
+
+async function loadVoices() {
+  status('Loading voices from fish.audio…');
+  const res = await chrome.runtime.sendMessage({ type: 'listVoices' });
+  if (!res?.ok) return status(`Couldn't load voices: ${res?.error || 'open fish.audio and log in'}`);
+  await chrome.storage.local.set({ voices: res.voices });
+  renderVoices(res.voices);
+  status('');
+}
+
 // ── Shared ─────────────────────────────────────────────────────────────────
 function currentTokens() {
   if (settings.mode === 'paste') {
@@ -153,11 +183,16 @@ async function onGenerate() {
   }
   if (!text) return status('No script text to generate.');
 
+  const voice = $('voice').value;
+  if (!voice) return status('Pick a voice first (↻ to load).');
+  // Remember the chosen voice as the default.
+  if (voice !== settings.fishVoice) settings = await saveSettings({ fishVoice: voice });
+
   const downloadPath = buildDownloadPath(settings, tokens);
   status('Generating on fish.audio…');
   const result = await chrome.runtime.sendMessage({
     type: 'runJob',
-    job: { text, downloadPath, voice: settings.fishVoice },
+    job: { text, downloadPath, voice },
   });
   status(result?.ok ? `Saved: ${result.savedAs}` : `Failed: ${result?.error || 'unknown error'}`);
 }

@@ -24,6 +24,12 @@
   "content_scripts": [
     {
       "matches": ["https://fish.audio/*"],
+      "js": ["src/content/fish-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://fish.audio/*"],
       "js": ["src/content/fish.js"],
       "run_at": "document_idle"
     }
