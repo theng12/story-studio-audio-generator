@@ -62,16 +62,21 @@ async function persist(patch) {
 }
 
 // ── Companion mode ─────────────────────────────────────────────────────────
+//
+// We do NOT pre-check /auth/me. On localhost the Story Studio server bypasses
+// auth for loopback requests, so no login is needed at all — and /auth/me
+// (a public endpoint that always checks the cookie) would wrongly 401 and
+// force a needless login prompt. Instead we just load the data; only a real
+// 401 from a data call (a remote/tailnet server) shows the login form.
 async function initCompanion() {
   client = new StudioClient(settings.studioBaseUrl);
   try {
-    await client.whoami(); // throws 401 if server mode + not logged in
     await loadCompanionData();
   } catch (e) {
     if (e.status === 401) {
       $('loginRow').hidden = false;
       $('loginBtn').addEventListener('click', doLogin);
-      status('Server mode: please log in.');
+      status('This server needs a login.');
     } else {
       status(`Can't reach Story Studio at ${settings.studioBaseUrl}. Is it running?`);
     }
