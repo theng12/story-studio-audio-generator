@@ -15,6 +15,10 @@ import { getSettings } from './lib/config.js';
 
 const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
 
+// Clicking the toolbar icon opens the persistent side panel (not a popup), so
+// the UI keeps its state and any running generation stays visible.
+chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
 // When the extension is installed or updated, content scripts already running
 // in open fish.audio tabs are STALE (they keep the old code until the page
 // reloads). Reload those tabs so they pick up the new content scripts —

@@ -7,7 +7,10 @@
 }
 * { box-sizing: border-box; }
 body {
-  width: 340px;
+  /* Fills the side panel (resizable); falls back to a sane min width. */
+  width: 100%;
+  min-width: 280px;
+  box-sizing: border-box;
   margin: 0;
   padding: 12px;
   font: 13px/1.45 -apple-system, system-ui, sans-serif;

@@ -128,12 +128,20 @@ counted, not fatal.
   if needed). The token + grecaptcha come from that page.
 - For companion mode, Story Studio running (desktop `:8000` or server `:8766`).
 
+## Side panel (not a popup)
+
+The UI runs as a Chrome **side panel** — click the toolbar icon and it opens
+docked on the right and **stays open** as you switch tabs or click around. That
+keeps your project/episode selection and any in-progress generation visible,
+instead of a popup that's destroyed (and has to reload everything) the moment
+you click away. Close it with the panel's own ✕.
+
 ## Install (unpacked, for development)
 
 1. Go to `chrome://extensions`, enable **Developer mode**.
 2. **Load unpacked** → select this folder.
-3. Open the extension's **Options** to pick a mode and set the filename
-   template.
+3. Click the toolbar icon to open the side panel; open **Options** (right-click
+   the icon → Options) to pick a mode and set the filename template.
 
 ## Files
 
