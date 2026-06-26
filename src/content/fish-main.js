@@ -22,19 +22,41 @@
 
   const token = () => localStorage.getItem('token') || '';
 
+  // Fish.audio's public reCAPTCHA Enterprise site key. It's a PUBLIC value
+  // (shipped to every visitor in the recaptcha script URL), not a secret.
+  // Used as the fallback when the page hasn't loaded reCAPTCHA yet — which is
+  // the common case, because Fish loads it lazily only when you click its own
+  // "Generate Speech". We can't wait for that, so we load it ourselves.
+  const FALLBACK_SITE_KEY = '6LfR4RwqAAAAAEvptRw9zohw7HeDU6NCqtAnJk1i';
+
+  // Prefer a key already on the page (survives a Fish key rotation); else the
+  // known public key.
   function siteKey() {
     for (const s of document.querySelectorAll('script[src]')) {
       const m = s.src.match(/[?&]render=([\w-]+)/);
       if (m) return m[1];
     }
-    return null;
+    return FALLBACK_SITE_KEY;
   }
 
-  function recaptcha(action) {
+  // Ensure grecaptcha.enterprise is available, injecting the Enterprise script
+  // ourselves if Fish hasn't lazy-loaded it yet.
+  function ensureRecaptcha(key) {
+    if (window.grecaptcha && window.grecaptcha.enterprise) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = `https://www.google.com/recaptcha/enterprise.js?render=${key}`;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Failed to load reCAPTCHA. Check your connection.'));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function recaptcha(action) {
     const key = siteKey();
-    if (!key) throw new Error('reCAPTCHA site key not found on page.');
+    await ensureRecaptcha(key);
     const g = (window.grecaptcha && window.grecaptcha.enterprise) || window.grecaptcha;
-    if (!g) throw new Error('grecaptcha not loaded.');
+    if (!g) throw new Error('grecaptcha unavailable after load.');
     return new Promise((resolve, reject) => {
       g.ready(() => g.execute(key, { action }).then(resolve).catch(reject));
     });
