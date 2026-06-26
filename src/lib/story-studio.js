@@ -60,19 +60,26 @@ export class StudioClient {
     return this._json(`/projects/${encodeURIComponent(slug)}/episodes`);
   }
 
-  // Per-chapter rows for an episode (chapter number, label, staleness…).
-  chapterList(slug, episodeId) {
+  // Per-chapter rows for an episode → { chapters: [{ number, title,
+  // present, word_count, character_count, audio_stale }] }.
+  //
+  // NOTE: `title` is REQUIRED in practice — episode folders are named
+  // "CODE - Title", so without it the server can't resolve the episode dir
+  // and returns an empty list. (Verified live against real projects.)
+  chapterList(slug, episodeId, title = '') {
+    const q = title ? `?title=${encodeURIComponent(title)}` : '';
     return this._json(
-      `/projects/${encodeURIComponent(slug)}/episodes/${encodeURIComponent(episodeId)}/chapter-list`
+      `/projects/${encodeURIComponent(slug)}/episodes/${encodeURIComponent(episodeId)}/chapter-list${q}`
     );
   }
 
-  // Plain text for one chapter.
-  chapterContent(slug, episodeId, chapterNumber) {
+  // Plain narration text for one chapter → { content }.
+  chapterContent(slug, episodeId, chapterNumber, title = '') {
+    const q = title ? `?title=${encodeURIComponent(title)}` : '';
     return this._json(
       `/projects/${encodeURIComponent(slug)}/episodes/${encodeURIComponent(
         episodeId
-      )}/chapters/${encodeURIComponent(chapterNumber)}/content`
+      )}/chapters/${encodeURIComponent(chapterNumber)}/content${q}`
     );
   }
 

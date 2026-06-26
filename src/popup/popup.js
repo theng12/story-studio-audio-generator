@@ -77,16 +77,19 @@ async function loadProjects() {
 async function loadEpisodes() {
   const slug = $('project').value;
   ctx.project = $('project').selectedOptions[0]?.textContent || slug;
-  const episodes = await client.listEpisodes(slug);
+  const raw = await client.listEpisodes(slug);
+  const episodes = Array.isArray(raw) ? raw : raw.episodes || [];
   const sel = $('episode');
   sel.innerHTML = '';
   for (const ep of episodes) {
     const opt = document.createElement('option');
-    // Episode identity fields vary; carry both code + title for naming.
-    opt.value = ep.id || ep.code || ep.episodeId;
-    opt.dataset.code = ep.code || ep.id || '';
+    // Episode identity = episode_code (e.g. "EP0001"); the title is needed
+    // to resolve the on-disk folder "CODE - Title".
+    const code = ep.episode_code || ep.code || '';
+    opt.value = code;
+    opt.dataset.code = code;
     opt.dataset.title = ep.title || '';
-    opt.textContent = `${ep.code || ''} ${ep.title || ''}`.trim();
+    opt.textContent = `${code} ${ep.title || ''}`.trim();
     sel.appendChild(opt);
   }
   sel.onchange = loadChapters;
@@ -102,13 +105,17 @@ async function loadChapters() {
   const sel = $('chapter');
   sel.innerHTML = '';
   try {
-    const rows = await client.chapterList(slug, episodeId);
+    const rows = await client.chapterList(slug, episodeId, ctx.episodeTitle);
     const list = Array.isArray(rows) ? rows : rows.chapters || [];
     for (const ch of list) {
       const opt = document.createElement('option');
-      opt.value = ch.number ?? ch.chapterNumber;
-      opt.dataset.label = ch.label || ch.title || `Chapter ${opt.value}`;
-      opt.textContent = opt.dataset.label;
+      const num = ch.number ?? ch.chapterNumber;
+      opt.value = num;
+      // Pad the number for a tidy filename token ("03 A Future Frozen…").
+      opt.dataset.num = String(num).padStart(2, '0');
+      opt.dataset.label = ch.title || ch.label || `Chapter ${num}`;
+      opt.dataset.chars = ch.character_count ?? '';
+      opt.textContent = `${opt.dataset.num} ${opt.dataset.label}`;
       sel.appendChild(opt);
     }
     sel.onchange = updatePreview;
@@ -158,7 +165,7 @@ function currentTokens() {
     project: ctx.project || '',
     episodeCode: ctx.episodeCode || '',
     episodeTitle: ctx.episodeTitle || '',
-    chapterNum: $('chapter').value || '',
+    chapterNum: chOpt?.dataset.num || $('chapter').value || '',
     chapterLabel: chOpt?.dataset.label || '',
   };
 }
@@ -178,7 +185,7 @@ async function onGenerate() {
     const episodeId = $('episode').value;
     const chapter = $('chapter').value;
     status('Loading chapter text…');
-    const res = await client.chapterContent(slug, episodeId, chapter);
+    const res = await client.chapterContent(slug, episodeId, chapter, ctx.episodeTitle);
     text = res.content || res.text || '';
   }
   if (!text) return status('No script text to generate.');
