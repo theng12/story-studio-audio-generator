@@ -30,6 +30,9 @@ async function init() {
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
+    $('generateAll').hidden = false;
+    $('generateAll').addEventListener('click', onGenerateAll);
+    chrome.runtime.onMessage.addListener(onBatchProgress);
     await initCompanion();
   } else {
     $('pastePane').hidden = false;
@@ -133,6 +136,73 @@ async function loadChapters() {
     status('Could not load chapters for this episode.');
   }
   updatePreview();
+}
+
+// ── Batch: generate all chapters ────────────────────────────────────────────
+function onBatchProgress(msg) {
+  if (msg?.type !== 'batchProgress') return;
+  const n = msg.index + 1;
+  if (msg.state === 'running') status(`(${n}/${msg.total}) generating ${msg.label}…`);
+  else if (msg.state === 'failed') status(`(${n}/${msg.total}) ${msg.label} failed: ${msg.error}`);
+}
+
+async function onGenerateAll() {
+  const voice = $('voice').value;
+  if (!voice) return status('Pick a voice first (↻ to load).');
+  const target = $('saveTarget').value;
+  const slug = $('project').value;
+  const opts = [...$('chapter').options];
+  if (!opts.length) return status('No chapters to generate.');
+
+  setBusy(true);
+  status('Loading chapter text…');
+  try {
+    // Pre-fetch each chapter's text (fast); the slow generate loop runs in the
+    // worker so it survives the popup closing.
+    const chapters = [];
+    for (const opt of opts) {
+      const num = opt.value;
+      const res = await client.chapterContent(slug, ctx.episodeCode, num, ctx.episodeTitle);
+      const text = res.content || res.text || '';
+      if (!text.trim()) continue; // skip empty/unexpanded chapters
+      const tokens = {
+        project: ctx.project || '',
+        episodeCode: ctx.episodeCode || '',
+        episodeTitle: ctx.episodeTitle || '',
+        chapterNum: opt.dataset.num || num,
+        chapterLabel: opt.dataset.label || '',
+      };
+      chapters.push({
+        chapterNumber: num,
+        label: opt.dataset.label || `Chapter ${num}`,
+        text,
+        downloadPath: buildDownloadPath(settings, tokens),
+      });
+    }
+    if (!chapters.length) return status('No chapters with script text found.');
+
+    if (target !== settings.saveTarget) settings = await saveSettings({ saveTarget: target });
+    status(`Generating ${chapters.length} chapters…`);
+    const result = await chrome.runtime.sendMessage({
+      type: 'runBatch',
+      batch: { slug, episodeCode: ctx.episodeCode, target, voice, chapters },
+    });
+    if (result?.ok) {
+      const tail = result.failed ? ` (${result.failed} failed)` : '';
+      status(`Done: ${result.succeeded}/${result.total} chapters saved${tail}.`);
+    } else {
+      status(`Batch failed: ${result?.error || 'unknown error'}`);
+    }
+  } catch (e) {
+    status(`Batch error: ${e.message || e}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function setBusy(b) {
+  $('generate').disabled = b;
+  $('generateAll').disabled = b;
 }
 
 // ── Voices ─────────────────────────────────────────────────────────────────

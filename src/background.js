@@ -1,14 +1,15 @@
 // Service worker — orchestrates a TTS job end to end.
 //
-// Flow:
+// Flow (single job):
 //   popup → background { type: "runJob", job }
 //   background → fish.audio content bridge { type: "fish:generate", text, voice }
 //   bridge → MAIN world → POST api.fish.audio/task (stream) → MP3 bytes
 //   bridge → background { base64, mime }
-//   background → chrome.downloads.download(data: URL, filename: job.downloadPath)
+//   background → save (project ingest OR chrome.downloads)
 //
-// The Fish step is isolated behind "fish:generate" / "fish:listVoices", so the
-// rest of the pipeline doesn't care how fish.audio is driven.
+// Batch ("generate all chapters") reuses the same generate-and-save core in a
+// sequential loop over one fish.audio tab, emitting progress as it goes. It
+// runs in the worker so it survives the popup being closed.
 
 import { getSettings } from './lib/config.js';
 
@@ -40,11 +41,12 @@ async function send(tabId, message) {
   return res;
 }
 
-async function runJob(job) {
-  const settings = await getSettings();
+// Generate one chapter's audio on fish.audio and save it (project folder via
+// Story Studio, or the browser Downloads folder). Returns a result summary.
+async function generateAndSave(job, settings, tab) {
   const voice = job.voice || settings.fishVoice;
   if (!voice) throw new Error('No fish.audio voice selected. Pick one in Settings.');
-  const tab = await ensureFishTab();
+  if (!job.text || !job.text.trim()) throw new Error('No script text to generate.');
 
   const { base64, mime } = await send(tab.id, {
     type: 'fish:generate',
@@ -52,7 +54,6 @@ async function runJob(job) {
     voice,
     speed: job.speed ?? 1,
   });
-
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
 
   // v2: hand the audio back to Story Studio so it files it into the episode's
@@ -92,6 +93,55 @@ async function runJob(job) {
   return { ok: true, downloadId, savedAs: filename, target: 'download' };
 }
 
+async function runJob(job) {
+  const settings = await getSettings();
+  const tab = await ensureFishTab();
+  return generateAndSave(job, settings, tab);
+}
+
+// Best-effort progress ping to the popup (no-op if it's closed).
+function emit(message) {
+  chrome.runtime.sendMessage(message).catch(() => {});
+}
+
+// Sequentially generate + save every chapter in `batch.chapters`. Each chapter
+// is { chapterNumber, label, text, downloadPath }. Shared fields (slug,
+// episodeCode, target, voice) live on the batch.
+async function runBatch(batch) {
+  const settings = await getSettings();
+  const tab = await ensureFishTab();
+  const total = batch.chapters.length;
+  const results = [];
+  let succeeded = 0;
+
+  for (let i = 0; i < total; i++) {
+    const ch = batch.chapters[i];
+    const label = ch.label || `Chapter ${ch.chapterNumber}`;
+    emit({ type: 'batchProgress', index: i, total, label, state: 'running' });
+    try {
+      const job = {
+        text: ch.text,
+        voice: batch.voice,
+        target: batch.target,
+        slug: batch.slug,
+        episodeCode: batch.episodeCode,
+        chapterNumber: ch.chapterNumber,
+        downloadPath: ch.downloadPath,
+      };
+      const r = await generateAndSave(job, settings, tab);
+      succeeded++;
+      results.push({ label, ok: true, savedAs: r.savedAs });
+      emit({ type: 'batchProgress', index: i, total, label, state: 'done', savedAs: r.savedAs });
+    } catch (e) {
+      const error = String(e.message || e);
+      results.push({ label, ok: false, error });
+      emit({ type: 'batchProgress', index: i, total, label, state: 'failed', error });
+    }
+  }
+
+  return { ok: true, total, succeeded, failed: total - succeeded, results };
+}
+
 async function listVoices() {
   const tab = await ensureFishTab();
   const { voices } = await send(tab.id, { type: 'fish:listVoices' });
@@ -101,6 +151,12 @@ async function listVoices() {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'runJob') {
     runJob(msg.job)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
+  if (msg?.type === 'runBatch') {
+    runBatch(msg.batch)
       .then((r) => sendResponse(r))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;

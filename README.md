@@ -77,6 +77,14 @@ two content scripts cooperate:
 Limit: one generation is capped at 15 000 characters (enforced with a clear
 error). Splitting long chapters and stitching the parts is a follow-up.
 
+## Generate all chapters
+
+In companion mode the popup has a **Generate all chapters** button. It
+pre-fetches every chapter's text, then the worker generates + saves them one
+by one (sequential, so fish.audio isn't hammered), reporting `(n/total)`
+progress. The loop runs in the service worker, so it keeps going even if you
+close the popup. Per-chapter failures are counted, not fatal.
+
 ## Requirements at run time
 
 - A fish.audio tab, **logged in** (the extension opens one in the background
