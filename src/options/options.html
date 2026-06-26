@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Story Studio Audio Generator — Settings</title>
+    <link rel="stylesheet" href="../popup/popup.css" />
+    <style>body { width: 420px; }</style>
+  </head>
+  <body>
+    <header><h1>Story Studio Audio Generator — Settings</h1></header>
+
+    <label>Mode
+      <select id="mode">
+        <option value="paste">Paste / type script manually</option>
+        <option value="companion">Companion — read from Story Studio</option>
+      </select>
+    </label>
+
+    <div id="companionOpts">
+      <label>Story Studio server URL
+        <input id="studioBaseUrl" placeholder="http://localhost:8766" />
+      </label>
+      <p class="muted">Desktop app: <code>http://localhost:8000</code> (no login).
+        Server mode: <code>http://localhost:8766</code> (login in the popup).</p>
+    </div>
+
+    <label>Download subfolder (inside Downloads)
+      <input id="downloadSubdir" />
+    </label>
+    <label>Filename template
+      <input id="filenameTemplate" />
+    </label>
+    <p class="muted">Tokens: <code>{project} {episodeCode} {chapterNum} {chapterLabel} {episodeTitle}</code></p>
+
+    <label>Default fish.audio voice (optional)
+      <input id="fishVoice" placeholder="set after recon" />
+    </label>
+
+    <button id="save" class="primary">Save</button>
+    <p id="status" class="muted"></p>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

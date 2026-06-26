@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Story Studio Audio Generator for Story Studio",
+  "version": "0.1.0",
+  "description": "Generate narration audio on fish.audio from your Story Studio KH scripts and save each file with the correct name.",
+  "permissions": ["downloads", "storage", "scripting", "tabs"],
+  "host_permissions": [
+    "http://localhost:8766/*",
+    "http://127.0.0.1:8766/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "https://fish.audio/*",
+    "https://api.fish.audio/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Story Studio Audio Generator for Story Studio",
+    "default_popup": "src/popup/popup.html"
+  },
+  "options_page": "src/options/options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://fish.audio/*"],
+      "js": ["src/content/fish.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "128": "src/icons/icon128.png"
+  }
+}

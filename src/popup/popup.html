@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Story Studio Audio Generator</title>
+  </head>
+  <body>
+    <header>
+      <h1>Story Studio Audio Generator → Story Studio</h1>
+      <button id="openOptions" class="link" title="Settings">⚙</button>
+    </header>
+
+    <!-- Companion mode: pick from a running Story Studio server -->
+    <section id="companionPane" hidden>
+      <div id="loginRow" class="row" hidden>
+        <input id="username" placeholder="username" autocomplete="username" />
+        <input id="password" type="password" placeholder="password" autocomplete="current-password" />
+        <button id="loginBtn">Log in</button>
+      </div>
+      <label>Project
+        <select id="project"></select>
+      </label>
+      <label>Episode
+        <select id="episode"></select>
+      </label>
+      <label>Chapter
+        <select id="chapter"></select>
+      </label>
+    </section>
+
+    <!-- Paste mode: free text -->
+    <section id="pastePane" hidden>
+      <label>Episode code (for filename)
+        <input id="pasteCode" placeholder="e.g. TN0005" />
+      </label>
+      <label>Label
+        <input id="pasteLabel" placeholder="e.g. 03 Chapter" />
+      </label>
+      <label>Script text
+        <textarea id="pasteText" rows="8" placeholder="Paste the narration here…"></textarea>
+      </label>
+    </section>
+
+    <div class="row">
+      <span id="filenamePreview" class="muted"></span>
+    </div>
+
+    <button id="generate" class="primary">Generate &amp; save</button>
+    <p id="status" class="muted"></p>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
