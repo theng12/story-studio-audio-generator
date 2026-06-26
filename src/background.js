@@ -54,6 +54,34 @@ async function runJob(job) {
   });
 
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
+
+  // v2: hand the audio back to Story Studio so it files it into the episode's
+  // real audio folder. Requires companion identifiers (slug + code + chapter).
+  if (job.target === 'project' && job.slug && job.episodeCode) {
+    const base = (settings.studioBaseUrl || '').replace(/\/+$/, '');
+    const url = `${base}/api/projects/${encodeURIComponent(job.slug)}/episodes/${encodeURIComponent(
+      job.episodeCode
+    )}/audio-ingest`;
+    const res = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapterNumber: job.chapterNumber, audioBase64: base64, format: ext }),
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const j = await res.json();
+        if (j?.detail) detail = j.detail;
+      } catch {
+        /* non-JSON */
+      }
+      throw new Error(`Story Studio rejected the audio: ${detail}`);
+    }
+    const j = await res.json();
+    return { ok: true, savedAs: j.saved_as, savedIn: j.audio_dir, target: 'project' };
+  }
+
   const filename = job.downloadPath.replace(/\.(mp3|wav)$/i, '') + `.${ext}`;
   const downloadId = await chrome.downloads.download({
     url: `data:${mime};base64,${base64}`,
@@ -61,7 +89,7 @@ async function runJob(job) {
     saveAs: false,
     conflictAction: 'uniquify',
   });
-  return { ok: true, downloadId, savedAs: filename };
+  return { ok: true, downloadId, savedAs: filename, target: 'download' };
 }
 
 async function listVoices() {

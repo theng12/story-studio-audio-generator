@@ -18,6 +18,16 @@ async function init() {
   $('loadVoices').addEventListener('click', loadVoices);
   await initVoices();
 
+  // Save-target selector. Project-folder saving needs companion identifiers,
+  // so in paste mode we force Downloads.
+  const saveSel = $('saveTarget');
+  saveSel.value = settings.saveTarget || 'project';
+  saveSel.addEventListener('change', updatePreview);
+  if (settings.mode !== 'companion') {
+    saveSel.value = 'download';
+    $('saveTargetLabel').hidden = true;
+  }
+
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
     await initCompanion();
@@ -171,8 +181,14 @@ function currentTokens() {
 }
 
 function updatePreview() {
-  const path = buildDownloadPath(settings, currentTokens());
-  $('filenamePreview').textContent = `↳ Downloads/${path}`;
+  const tokens = currentTokens();
+  if ($('saveTarget').value === 'project') {
+    const slug = $('project').value || '';
+    const file = `${tokens.episodeCode}_Chapter_${tokens.chapterNum || '??'}.mp3`;
+    $('filenamePreview').textContent = `↳ ${slug} episode audio folder / ${file}`;
+  } else {
+    $('filenamePreview').textContent = `↳ Downloads/${buildDownloadPath(settings, tokens)}`;
+  }
 }
 
 async function onGenerate() {
@@ -192,14 +208,27 @@ async function onGenerate() {
 
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
-  // Remember the chosen voice as the default.
-  if (voice !== settings.fishVoice) settings = await saveSettings({ fishVoice: voice });
+  const target = $('saveTarget').value;
+  // Remember the chosen voice + target as defaults.
+  const patch = {};
+  if (voice !== settings.fishVoice) patch.fishVoice = voice;
+  if (target !== settings.saveTarget) patch.saveTarget = target;
+  if (Object.keys(patch).length) settings = await saveSettings(patch);
 
-  const downloadPath = buildDownloadPath(settings, tokens);
-  status('Generating on fish.audio…');
-  const result = await chrome.runtime.sendMessage({
-    type: 'runJob',
-    job: { text, downloadPath, voice },
-  });
-  status(result?.ok ? `Saved: ${result.savedAs}` : `Failed: ${result?.error || 'unknown error'}`);
+  const job = { text, voice, target };
+  if (target === 'project') {
+    job.slug = $('project').value;
+    job.episodeCode = tokens.episodeCode;
+    job.chapterNumber = $('chapter').value; // numeric chapter from chapter-list
+  } else {
+    job.downloadPath = buildDownloadPath(settings, tokens);
+  }
+
+  status(target === 'project' ? 'Generating + saving to project…' : 'Generating on fish.audio…');
+  const result = await chrome.runtime.sendMessage({ type: 'runJob', job });
+  if (result?.ok) {
+    status(target === 'project' ? `Saved to project: ${result.savedAs}` : `Saved: ${result.savedAs}`);
+  } else {
+    status(`Failed: ${result?.error || 'unknown error'}`);
+  }
 }

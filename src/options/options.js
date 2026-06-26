@@ -1,7 +1,7 @@
 import { getSettings, saveSettings, DEFAULTS } from '../lib/config.js';
 
 const $ = (id) => document.getElementById(id);
-const FIELDS = ['mode', 'studioBaseUrl', 'downloadSubdir', 'filenameTemplate', 'fishVoice'];
+const FIELDS = ['mode', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate', 'fishVoice'];
 
 function toggleCompanion() {
   $('companionOpts').style.display = $('mode').value === 'companion' ? '' : 'none';

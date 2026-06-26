@@ -26,6 +26,12 @@ export const DEFAULTS = {
   filenameTemplate: '{episodeCode} - {chapterNum} {chapterLabel}',
   // Default fish.audio voice id/name to apply (resolved during recon).
   fishVoice: '',
+  // Where generated audio goes:
+  //   "project"  — POST back to Story Studio so it lands in the episode's
+  //                real audio folder ({CODE}_Chapter_NN.mp3) and rebuilds
+  //                audio_chapters.json. Companion mode only.
+  //   "download" — save into the browser Downloads folder (works always).
+  saveTarget: 'project',
 };
 
 const STORAGE_KEY = 'settings';

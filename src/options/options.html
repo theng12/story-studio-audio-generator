@@ -22,6 +22,16 @@
       </label>
       <p class="muted">Desktop app: <code>http://localhost:8000</code> (no login).
         Server mode: <code>http://localhost:8766</code> (login in the popup).</p>
+
+      <label>Default save target
+        <select id="saveTarget">
+          <option value="project">Story Studio project folder (via server)</option>
+          <option value="download">Downloads folder</option>
+        </select>
+      </label>
+      <p class="muted">"Project folder" posts the audio back so it lands in the
+        episode's real audio folder and rebuilds <code>audio_chapters.json</code>.
+        Paste mode always uses Downloads.</p>
     </div>
 
     <label>Download subfolder (inside Downloads)

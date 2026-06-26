@@ -30,16 +30,23 @@ hand.
   Endpoints used: `GET /api/projects`, `GET /api/projects/:slug/episodes`,
   `…/chapter-list`, `…/chapters/:n/content`.
 
-### Saving (v1 vs v2)
+### Saving — two targets (chosen in the popup / Options)
 
-- **v1 (this build):** saves into the browser **Downloads** folder, in a
-  per-project / per-episode subfolder, with the correct filename. This is the
-  hard limit of the browser sandbox — extensions can't write to arbitrary
-  disk paths.
-- **v2 (planned):** POST the finished audio back to a small new Story Studio
-  endpoint so the app files it into the *real* episode `audio/` folder using
-  its own path logic. Cleaner than a native-host helper and reuses existing
-  code.
+- **Story Studio project folder (v2, companion mode):** the extension POSTs
+  the audio to `POST /api/projects/:slug/episodes/:code/audio-ingest`. Story
+  Studio writes it into the episode's real audio folder as
+  `{CODE}_Chapter_NN.mp3` — exactly what its own Audio Assembly produces — and
+  rebuilds `audio_chapters.json` so merge / subtitles / video pick it up. No
+  native-host helper needed; the running server does the filing.
+- **Downloads folder (always available):** saves into the browser Downloads
+  folder, in a per-project / per-episode subfolder, with the correct filename.
+  This is the only option in paste mode (no project identifiers) and the hard
+  limit of the browser sandbox.
+
+> The `audio-ingest` endpoint lives in the Story Studio repo
+> (`electron/server/routes/audio.ts`) on branch `feat/audio-ingest-from-browser`.
+> It must be built into the app (`npm run build` + relaunch) before the
+> project-folder target works against a running server.
 
 ## fish.audio automation (how it actually works)
 
