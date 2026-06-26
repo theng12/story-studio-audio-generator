@@ -53,3 +53,16 @@ export async function saveSettings(patch) {
   await chrome.storage.sync.set({ [STORAGE_KEY]: next });
   return next;
 }
+
+// Story Studio login, stored in LOCAL storage (not synced across machines).
+// Only needed for a remote/tailnet server — localhost bypasses auth entirely.
+const CRED_KEY = 'studioCredentials';
+
+export async function getCredentials() {
+  const stored = await chrome.storage.local.get(CRED_KEY);
+  return stored[CRED_KEY] || { username: '', password: '' };
+}
+
+export async function saveCredentials({ username, password }) {
+  await chrome.storage.local.set({ [CRED_KEY]: { username, password } });
+}

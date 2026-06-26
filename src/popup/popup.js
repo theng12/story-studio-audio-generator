@@ -1,4 +1,4 @@
-import { getSettings, saveSettings } from '../lib/config.js';
+import { getSettings, saveSettings, getCredentials } from '../lib/config.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { buildDownloadPath } from '../lib/naming.js';
 
@@ -73,26 +73,25 @@ async function initCompanion() {
   try {
     await loadCompanionData();
   } catch (e) {
-    if (e.status === 401) {
-      $('loginRow').hidden = false;
-      $('loginBtn').addEventListener('click', doLogin);
-      status('This server needs a login.');
-    } else {
+    if (e.status !== 401) {
       status(`Can't reach Story Studio at ${settings.studioBaseUrl}. Is it running?`);
+      return;
     }
-  }
-}
-
-async function doLogin() {
-  try {
-    status('Logging in…');
-    await client.login($('username').value.trim(), $('password').value);
-    $('loginRow').hidden = true;
-    $('password').value = '';
-    await loadCompanionData();
-    status('');
-  } catch (e) {
-    status(`Login failed: ${e.message}`);
+    // A real 401 means a remote server that needs a login. Use the credentials
+    // saved in Settings (localhost never reaches here — it bypasses auth).
+    const cred = await getCredentials();
+    if (!cred.username || !cred.password) {
+      status('This server needs a login — add it in Settings (⚙).');
+      return;
+    }
+    try {
+      status('Signing in…');
+      await client.login(cred.username, cred.password);
+      await loadCompanionData();
+      status('');
+    } catch {
+      status('Saved login was rejected — update it in Settings (⚙).');
+    }
   }
 }
 

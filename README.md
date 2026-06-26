@@ -95,6 +95,11 @@ error). Splitting long chapters and stitching the parts is a follow-up.
 - **Remembers your last selection.** The last project, episode, voice, save
   target, and auto-tag toggle are restored when you reopen the popup (no more
   resetting to the first project).
+- **No login over localhost.** The Story Studio server trusts loopback
+  requests, so the popup never asks you to log in for a `localhost` server.
+  A login is only needed for a remote / tailnet address — set the username +
+  password once in **Settings** (stored locally on this device, not synced)
+  and the popup signs in automatically when a remote server returns 401.
 
 ## Generate all chapters
 

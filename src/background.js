@@ -15,8 +15,21 @@ import { getSettings } from './lib/config.js';
 
 const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
 
-// Find a usable fish.audio tab (must be an /app page so grecaptcha is loaded),
-// or open one in the background and wait for it to finish loading.
+// When the extension is installed or updated, content scripts already running
+// in open fish.audio tabs are STALE (they keep the old code until the page
+// reloads). Reload those tabs so they pick up the new content scripts —
+// otherwise a generate would run against outdated code.
+chrome.runtime.onInstalled.addListener(async () => {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
+    for (const t of tabs) chrome.tabs.reload(t.id);
+  } catch {
+    /* best-effort */
+  }
+});
+
+// Find a usable fish.audio tab, or open one in the background and wait for it
+// to finish loading so the content scripts are live.
 async function ensureFishTab() {
   const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
   const ready = tabs.find((t) => t.status === 'complete');
@@ -26,7 +39,7 @@ async function ensureFishTab() {
     const listener = (tabId, info) => {
       if (tabId === tab.id && info.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
-        // Give the content scripts + grecaptcha a beat to initialise.
+        // Give the content scripts a beat to initialise.
         setTimeout(resolve, 800);
       }
     };

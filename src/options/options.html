@@ -20,8 +20,16 @@
       <label>Story Studio server URL
         <input id="studioBaseUrl" placeholder="http://localhost:8766" />
       </label>
-      <p class="muted">Desktop app: <code>http://localhost:8000</code> (no login).
-        Server mode: <code>http://localhost:8766</code> (login in the popup).</p>
+      <p class="muted">Over <code>localhost</code> no login is needed (the server
+        trusts local requests). Only a remote / tailnet address needs the login
+        below.</p>
+
+      <label>Username <span class="muted">(only for remote servers)</span>
+        <input id="studioUsername" autocomplete="off" placeholder="leave blank for localhost" />
+      </label>
+      <label>Password
+        <input id="studioPassword" type="password" autocomplete="off" placeholder="stored locally on this device" />
+      </label>
 
       <label>Default save target
         <select id="saveTarget">
