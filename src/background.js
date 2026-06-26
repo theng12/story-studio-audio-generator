@@ -53,6 +53,7 @@ async function generateAndSave(job, settings, tab) {
     text: job.text,
     voice,
     speed: job.speed ?? 1,
+    autoTag: !!job.autoTag,
   });
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
 
@@ -67,7 +68,12 @@ async function generateAndSave(job, settings, tab) {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chapterNumber: job.chapterNumber, audioBase64: base64, format: ext }),
+      body: JSON.stringify({
+        slug: job.sectionSlug,
+        chapterNumber: job.chapterNumber,
+        audioBase64: base64,
+        format: ext,
+      }),
     });
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
@@ -104,9 +110,17 @@ function emit(message) {
   chrome.runtime.sendMessage(message).catch(() => {});
 }
 
-// Sequentially generate + save every chapter in `batch.chapters`. Each chapter
-// is { chapterNumber, label, text, downloadPath }. Shared fields (slug,
-// episodeCode, target, voice) live on the batch.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Human-like pause between chapters: a randomised gap so we don't hammer
+// fish.audio. Each generation already waits for the audio + the save before
+// the next starts; this just adds polite spacing on top.
+function politeGap() {
+  return 2500 + Math.floor(Math.random() * 3500); // 2.5–6.0s
+}
+
+// Sequentially generate + save every section in `batch.chapters`. Each entry is
+// { chapterNumber, slug, label, text, downloadPath }. Shared fields (slug base,
+// episodeCode, target, voice, autoTag) live on the batch.
 async function runBatch(batch) {
   const settings = await getSettings();
   const tab = await ensureFishTab();
@@ -116,7 +130,7 @@ async function runBatch(batch) {
 
   for (let i = 0; i < total; i++) {
     const ch = batch.chapters[i];
-    const label = ch.label || `Chapter ${ch.chapterNumber}`;
+    const label = ch.label || ch.slug || `Chapter ${ch.chapterNumber}`;
     emit({ type: 'batchProgress', index: i, total, label, state: 'running' });
     try {
       const job = {
@@ -126,6 +140,8 @@ async function runBatch(batch) {
         slug: batch.slug,
         episodeCode: batch.episodeCode,
         chapterNumber: ch.chapterNumber,
+        sectionSlug: ch.slug,
+        autoTag: batch.autoTag,
         downloadPath: ch.downloadPath,
       };
       const r = await generateAndSave(job, settings, tab);
@@ -137,6 +153,8 @@ async function runBatch(batch) {
       results.push({ label, ok: false, error });
       emit({ type: 'batchProgress', index: i, total, label, state: 'failed', error });
     }
+    // Polite, human-like gap before the next chapter (skip after the last).
+    if (i < total - 1) await sleep(politeGap());
   }
 
   return { ok: true, total, succeeded, failed: total - succeeded, results };

@@ -24,6 +24,20 @@
   // — verified live: a correct body with no recaptcha field returns the MP3
   // with status 200. So we don't mint one; the localStorage token is enough.
 
+  // Auto-tag: Fish's "Auto Tag All" — inserts [emphasis]/[soft]/[pause]/…
+  // tags so the S2 model reads more expressively. Verified live:
+  //   POST /enhance/text { payload: { text } } -> { enhanced_script }
+  async function enhance(text) {
+    const r = await fetch(`${API}/enhance/text`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: { text } }),
+    });
+    if (!r.ok) throw new Error(`Auto-tag failed (${r.status}).`);
+    const j = await r.json();
+    return j.enhanced_script || text;
+  }
+
   async function listVoices() {
     const r = await fetch(`${API}/model?self=true&page_size=50`, {
       headers: { Authorization: `Bearer ${token()}` },
@@ -35,9 +49,10 @@
   }
 
   // Returns { base64, mime } for the generated audio.
-  async function generate({ text, model, speed = 1, volume = 0, format = 'mp3' }) {
+  async function generate({ text, model, speed = 1, volume = 0, format = 'mp3', autoTag = false }) {
     if (!text || !text.trim()) throw new Error('No text to speak.');
     if (!model) throw new Error('No voice (model_id) selected.');
+    if (autoTag) text = await enhance(text);
     // The studio caps a single generation at 15k characters. Chunking +
     // stitching multiple chapters is a follow-up; for now fail loudly.
     if (text.length > 15000) {

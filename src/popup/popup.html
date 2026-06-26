@@ -22,10 +22,10 @@
       <label>Project
         <select id="project"></select>
       </label>
-      <label>Episode
+      <label>Episode <span class="muted">(script done, audio missing)</span>
         <select id="episode"></select>
       </label>
-      <label>Chapter
+      <label>Chapter / Intro <span class="muted">(missing audio only)</span>
         <select id="chapter"></select>
       </label>
     </section>
@@ -55,6 +55,11 @@
         <option value="project">Story Studio project folder</option>
         <option value="download">Downloads folder</option>
       </select>
+    </label>
+
+    <label class="check">
+      <input type="checkbox" id="autoTag" />
+      Auto-tag emotions &amp; pauses (Fish "Auto Tag All")
     </label>
 
     <div class="row">

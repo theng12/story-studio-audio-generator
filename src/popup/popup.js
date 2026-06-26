@@ -4,10 +4,16 @@ import { buildDownloadPath } from '../lib/naming.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
+const pad = (n) => String(n).padStart(2, '0');
 
 let settings;
 let client; // StudioClient (companion mode)
-let ctx = {}; // { project, episodeCode, episodeTitle, chapterNum, chapterLabel }
+let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
+let episodesByProject = {}; // slug -> [episode objects with .status]
+let scriptCache = {}; // episodeCode -> script-content response (for intro text)
+
+// An episode is worth showing when its script is done but audio isn't.
+const isEligible = (ep) => !!(ep.status && ep.status.script && !ep.status.audio);
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -22,11 +28,18 @@ async function init() {
   // so in paste mode we force Downloads.
   const saveSel = $('saveTarget');
   saveSel.value = settings.saveTarget || 'project';
-  saveSel.addEventListener('change', updatePreview);
+  saveSel.addEventListener('change', () => {
+    persist({ saveTarget: saveSel.value });
+    updatePreview();
+  });
   if (settings.mode !== 'companion') {
     saveSel.value = 'download';
     $('saveTargetLabel').hidden = true;
   }
+
+  // Auto-tag toggle (both modes).
+  $('autoTag').checked = !!settings.autoTag;
+  $('autoTag').addEventListener('change', () => persist({ autoTag: $('autoTag').checked }));
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
@@ -43,12 +56,17 @@ async function init() {
   }
 }
 
+// Persist a settings patch and keep our local copy in sync.
+async function persist(patch) {
+  settings = await saveSettings(patch);
+}
+
 // ── Companion mode ─────────────────────────────────────────────────────────
 async function initCompanion() {
   client = new StudioClient(settings.studioBaseUrl);
   try {
     await client.whoami(); // throws 401 if server mode + not logged in
-    await loadProjects();
+    await loadCompanionData();
   } catch (e) {
     if (e.status === 401) {
       $('loginRow').hidden = false;
@@ -66,79 +84,153 @@ async function doLogin() {
     await client.login($('username').value.trim(), $('password').value);
     $('loginRow').hidden = true;
     $('password').value = '';
-    await loadProjects();
+    await loadCompanionData();
     status('');
   } catch (e) {
     status(`Login failed: ${e.message}`);
   }
 }
 
-async function loadProjects() {
+// Load every project's episodes once, then show only projects that have at
+// least one episode needing audio.
+async function loadCompanionData() {
+  status('Scanning projects…');
   const projects = await client.listProjects();
+  await Promise.all(
+    projects.map(async (p) => {
+      try {
+        const raw = await client.listEpisodes(p.slug);
+        episodesByProject[p.slug] = Array.isArray(raw) ? raw : raw.episodes || [];
+      } catch {
+        episodesByProject[p.slug] = [];
+      }
+    })
+  );
+
+  const eligible = projects.filter((p) => (episodesByProject[p.slug] || []).some(isEligible));
   const sel = $('project');
   sel.innerHTML = '';
-  for (const p of projects) {
+  for (const p of eligible) {
     const opt = document.createElement('option');
     opt.value = p.slug;
     opt.textContent = p.name || p.slug;
     sel.appendChild(opt);
   }
-  sel.addEventListener('change', loadEpisodes);
-  if (projects.length) await loadEpisodes();
+  if (!eligible.length) {
+    status('No episodes need audio — every script already has its audio. 🎉');
+    return;
+  }
+  // Restore last-used project if it's still eligible.
+  if (settings.lastProject && eligible.some((p) => p.slug === settings.lastProject)) {
+    sel.value = settings.lastProject;
+  }
+  sel.onchange = () => {
+    persist({ lastProject: sel.value });
+    loadEpisodes();
+  };
+  status('');
+  await loadEpisodes();
 }
 
 async function loadEpisodes() {
   const slug = $('project').value;
+  ctx.projectSlug = slug;
   ctx.project = $('project').selectedOptions[0]?.textContent || slug;
-  const raw = await client.listEpisodes(slug);
-  const episodes = Array.isArray(raw) ? raw : raw.episodes || [];
+  const eps = (episodesByProject[slug] || []).filter(isEligible);
   const sel = $('episode');
   sel.innerHTML = '';
-  for (const ep of episodes) {
-    const opt = document.createElement('option');
-    // Episode identity = episode_code (e.g. "EP0001"); the title is needed
-    // to resolve the on-disk folder "CODE - Title".
+  for (const ep of eps) {
     const code = ep.episode_code || ep.code || '';
+    const opt = document.createElement('option');
     opt.value = code;
-    opt.dataset.code = code;
     opt.dataset.title = ep.title || '';
+    opt.dataset.hasIntro = ep.status?.introduction ? '1' : '';
     opt.textContent = `${code} ${ep.title || ''}`.trim();
     sel.appendChild(opt);
   }
-  sel.onchange = loadChapters;
-  if (episodes.length) await loadChapters();
+  if (settings.lastEpisode && [...sel.options].some((o) => o.value === settings.lastEpisode)) {
+    sel.value = settings.lastEpisode;
+  }
+  sel.onchange = () => {
+    persist({ lastEpisode: sel.value });
+    loadSections();
+  };
+  if (eps.length) await loadSections();
 }
 
-async function loadChapters() {
-  const slug = $('project').value;
+// Build the chapter/intro dropdown from the episode's MISSING audio files.
+async function loadSections() {
+  const slug = ctx.projectSlug;
   const epOpt = $('episode').selectedOptions[0];
-  ctx.episodeCode = epOpt?.dataset.code || '';
+  ctx.episodeCode = epOpt?.value || '';
   ctx.episodeTitle = epOpt?.dataset.title || '';
-  const episodeId = $('episode').value;
   const sel = $('chapter');
   sel.innerHTML = '';
+  status('Finding missing audio…');
   try {
-    const rows = await client.chapterList(slug, episodeId, ctx.episodeTitle);
-    const list = Array.isArray(rows) ? rows : rows.chapters || [];
-    for (const ch of list) {
+    const [audio, chapterRows] = await Promise.all([
+      client.audioStatus(slug, ctx.episodeCode),
+      client.chapterList(slug, ctx.episodeCode, ctx.episodeTitle).catch(() => ({ chapters: [] })),
+    ]);
+    const titles = {};
+    for (const c of chapterRows.chapters || chapterRows || []) {
+      titles[c.number ?? c.chapterNumber] = c.title || c.label;
+    }
+    const sections = [];
+    for (const f of audio.missing_files || []) {
+      if (/_Introduction\.(mp3|wav)$/i.test(f)) {
+        sections.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
+      } else {
+        const m = f.match(/_Chapter_(\d+)\.(?:mp3|wav)$/i);
+        if (m) {
+          const num = parseInt(m[1], 10);
+          sections.push({
+            slug: `Chapter_${pad(num)}`,
+            kind: 'chapter',
+            num,
+            label: `${pad(num)} ${titles[num] || `Chapter ${num}`}`,
+          });
+        }
+      }
+    }
+    // Intro first, then chapters in order.
+    sections.sort((a, b) =>
+      a.kind === b.kind ? (a.num || 0) - (b.num || 0) : a.kind === 'intro' ? -1 : 1
+    );
+    for (const s of sections) {
       const opt = document.createElement('option');
-      const num = ch.number ?? ch.chapterNumber;
-      opt.value = num;
-      // Pad the number for a tidy filename token ("03 A Future Frozen…").
-      opt.dataset.num = String(num).padStart(2, '0');
-      opt.dataset.label = ch.title || ch.label || `Chapter ${num}`;
-      opt.dataset.chars = ch.character_count ?? '';
-      opt.textContent = `${opt.dataset.num} ${opt.dataset.label}`;
+      opt.value = s.slug;
+      opt.dataset.kind = s.kind;
+      opt.dataset.num = s.num ?? '';
+      opt.dataset.label = s.label;
+      opt.textContent = s.label;
       sel.appendChild(opt);
     }
     sel.onchange = updatePreview;
-  } catch {
-    status('Could not load chapters for this episode.');
+    status(sections.length ? '' : 'This episode already has all its audio.');
+  } catch (e) {
+    status(`Could not load sections: ${e.message || e}`);
   }
   updatePreview();
 }
 
-// ── Batch: generate all chapters ────────────────────────────────────────────
+// Fetch the narration text for one section (chapter or intro).
+async function sectionText(kind, num) {
+  if (kind === 'intro') {
+    if (!scriptCache[ctx.episodeCode]) {
+      scriptCache[ctx.episodeCode] = await client.scriptContent(
+        ctx.projectSlug,
+        ctx.episodeCode,
+        ctx.episodeTitle
+      );
+    }
+    return scriptCache[ctx.episodeCode]?.introduction?.content || '';
+  }
+  const res = await client.chapterContent(ctx.projectSlug, ctx.episodeCode, num, ctx.episodeTitle);
+  return res.content || res.text || '';
+}
+
+// ── Batch: generate all missing sections ────────────────────────────────────
 function onBatchProgress(msg) {
   if (msg?.type !== 'batchProgress') return;
   const n = msg.index + 1;
@@ -150,46 +242,43 @@ async function onGenerateAll() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   const target = $('saveTarget').value;
-  const slug = $('project').value;
+  const slug = ctx.projectSlug;
   const opts = [...$('chapter').options];
-  if (!opts.length) return status('No chapters to generate.');
+  if (!opts.length) return status('Nothing to generate — no missing audio.');
 
   setBusy(true);
-  status('Loading chapter text…');
+  status('Loading script text…');
   try {
-    // Pre-fetch each chapter's text (fast); the slow generate loop runs in the
-    // worker so it survives the popup closing.
     const chapters = [];
     for (const opt of opts) {
-      const num = opt.value;
-      const res = await client.chapterContent(slug, ctx.episodeCode, num, ctx.episodeTitle);
-      const text = res.content || res.text || '';
-      if (!text.trim()) continue; // skip empty/unexpanded chapters
-      const tokens = {
-        project: ctx.project || '',
-        episodeCode: ctx.episodeCode || '',
-        episodeTitle: ctx.episodeTitle || '',
-        chapterNum: opt.dataset.num || num,
-        chapterLabel: opt.dataset.label || '',
-      };
+      const text = await sectionText(opt.dataset.kind, opt.dataset.num);
+      if (!text.trim()) continue; // skip empty/unexpanded sections
       chapters.push({
-        chapterNumber: num,
-        label: opt.dataset.label || `Chapter ${num}`,
+        slug: opt.value,
+        chapterNumber: opt.dataset.num || null,
+        label: opt.dataset.label,
         text,
-        downloadPath: buildDownloadPath(settings, tokens),
+        downloadPath: buildDownloadPath(settings, sectionTokens(opt)),
       });
     }
-    if (!chapters.length) return status('No chapters with script text found.');
+    if (!chapters.length) return status('No sections with script text found.');
 
-    if (target !== settings.saveTarget) settings = await saveSettings({ saveTarget: target });
-    status(`Generating ${chapters.length} chapters…`);
+    persist({ saveTarget: target, fishVoice: voice });
+    status(`Generating ${chapters.length} section(s)…`);
     const result = await chrome.runtime.sendMessage({
       type: 'runBatch',
-      batch: { slug, episodeCode: ctx.episodeCode, target, voice, chapters },
+      batch: {
+        slug,
+        episodeCode: ctx.episodeCode,
+        target,
+        voice,
+        autoTag: $('autoTag').checked,
+        chapters,
+      },
     });
     if (result?.ok) {
       const tail = result.failed ? ` (${result.failed} failed)` : '';
-      status(`Done: ${result.succeeded}/${result.total} chapters saved${tail}.`);
+      status(`Done: ${result.succeeded}/${result.total} saved${tail}.`);
     } else {
       status(`Batch failed: ${result?.error || 'unknown error'}`);
     }
@@ -234,62 +323,65 @@ async function loadVoices() {
 }
 
 // ── Shared ─────────────────────────────────────────────────────────────────
+function sectionTokens(opt) {
+  return {
+    project: ctx.project || '',
+    episodeCode: ctx.episodeCode || '',
+    episodeTitle: ctx.episodeTitle || '',
+    chapterNum: opt?.dataset.num || '',
+    chapterLabel: opt?.dataset.label || '',
+  };
+}
+
 function currentTokens() {
   if (settings.mode === 'paste') {
     const code = $('pasteCode').value.trim() || 'audio';
     const label = $('pasteLabel').value.trim();
     return { project: '', episodeCode: code, episodeTitle: '', chapterNum: '', chapterLabel: label };
   }
-  const chOpt = $('chapter').selectedOptions[0];
-  return {
-    project: ctx.project || '',
-    episodeCode: ctx.episodeCode || '',
-    episodeTitle: ctx.episodeTitle || '',
-    chapterNum: chOpt?.dataset.num || $('chapter').value || '',
-    chapterLabel: chOpt?.dataset.label || '',
-  };
+  return sectionTokens($('chapter').selectedOptions[0]);
 }
 
 function updatePreview() {
   const tokens = currentTokens();
-  if ($('saveTarget').value === 'project') {
-    const slug = $('project').value || '';
-    const file = `${tokens.episodeCode}_Chapter_${tokens.chapterNum || '??'}.mp3`;
-    $('filenamePreview').textContent = `↳ ${slug} episode audio folder / ${file}`;
+  if (settings.mode === 'companion' && $('saveTarget').value === 'project') {
+    const slug = $('chapter').value || 'Chapter_??';
+    $('filenamePreview').textContent = `↳ ${ctx.episodeCode || '??'} audio folder / ${ctx.episodeCode}_${slug}.mp3`;
   } else {
     $('filenamePreview').textContent = `↳ Downloads/${buildDownloadPath(settings, tokens)}`;
   }
 }
 
 async function onGenerate() {
+  const voice = $('voice').value;
+  if (!voice) return status('Pick a voice first (↻ to load).');
+  const target = $('saveTarget').value;
+  const autoTag = $('autoTag').checked;
+
   let text;
+  let sectionSlug = '';
+  let chapterNumber = '';
   const tokens = currentTokens();
   if (settings.mode === 'paste') {
     text = $('pasteText').value.trim();
   } else {
-    const slug = $('project').value;
-    const episodeId = $('episode').value;
-    const chapter = $('chapter').value;
-    status('Loading chapter text…');
-    const res = await client.chapterContent(slug, episodeId, chapter, ctx.episodeTitle);
-    text = res.content || res.text || '';
+    const opt = $('chapter').selectedOptions[0];
+    if (!opt) return status('Nothing to generate — no missing audio.');
+    sectionSlug = opt.value;
+    chapterNumber = opt.dataset.num || '';
+    status('Loading script text…');
+    text = await sectionText(opt.dataset.kind, opt.dataset.num);
   }
   if (!text) return status('No script text to generate.');
 
-  const voice = $('voice').value;
-  if (!voice) return status('Pick a voice first (↻ to load).');
-  const target = $('saveTarget').value;
-  // Remember the chosen voice + target as defaults.
-  const patch = {};
-  if (voice !== settings.fishVoice) patch.fishVoice = voice;
-  if (target !== settings.saveTarget) patch.saveTarget = target;
-  if (Object.keys(patch).length) settings = await saveSettings(patch);
+  persist({ fishVoice: voice, saveTarget: target });
 
-  const job = { text, voice, target };
+  const job = { text, voice, target, autoTag };
   if (target === 'project') {
-    job.slug = $('project').value;
-    job.episodeCode = tokens.episodeCode;
-    job.chapterNumber = $('chapter').value; // numeric chapter from chapter-list
+    job.slug = ctx.projectSlug;
+    job.episodeCode = ctx.episodeCode;
+    job.sectionSlug = sectionSlug;
+    job.chapterNumber = chapterNumber;
   } else {
     job.downloadPath = buildDownloadPath(settings, tokens);
   }

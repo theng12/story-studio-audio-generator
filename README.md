@@ -66,6 +66,11 @@ API-driven**, no DOM scraping, no polling:
    enforce it for an authenticated request — verified live — so we skip it.)
 3. **Voices** — `GET https://api.fish.audio/model?self=true` lists the user's
    own voices (`_id` = the `model_id` to pass).
+4. **Auto-tag** (optional) — Fish's "Auto Tag All" is
+   `POST https://api.fish.audio/enhance/text` with `{ payload: { text } }` →
+   `{ enhanced_script }`. It inserts `[emphasis]`/`[soft]`/`[pause]`/… tags for
+   more expressive narration. Verified it preserves the wording exactly
+   (stripping the tags returns the original text); off by default.
 
 Because `grecaptcha` is main-world only and `chrome.*` is isolated-world only,
 two content scripts cooperate:
@@ -78,13 +83,29 @@ two content scripts cooperate:
 Limit: one generation is capped at 15 000 characters (enforced with a clear
 error). Splitting long chapters and stitching the parts is a follow-up.
 
+## Companion mode behaviour
+
+- **Only shows what needs audio.** Projects, episodes, and chapters are
+  filtered to "script is done, audio is missing": episodes use the Story Studio
+  `status` flags (`script && !audio`); chapters/intro come from the episode's
+  `audio-status` `missing_files`, so anything already voiced is hidden.
+- **Introduction included.** Episodes with an intro section show an
+  **Introduction** entry (saved as `{CODE}_Introduction.mp3`), alongside the
+  chapters.
+- **Remembers your last selection.** The last project, episode, voice, save
+  target, and auto-tag toggle are restored when you reopen the popup (no more
+  resetting to the first project).
+
 ## Generate all chapters
 
 In companion mode the popup has a **Generate all chapters** button. It
-pre-fetches every chapter's text, then the worker generates + saves them one
-by one (sequential, so fish.audio isn't hammered), reporting `(n/total)`
-progress. The loop runs in the service worker, so it keeps going even if you
-close the popup. Per-chapter failures are counted, not fatal.
+pre-fetches every missing section's text (intro + chapters), then the worker
+generates + saves them one at a time — **fully sequential and human-paced**:
+each chapter waits for the audio to come back and be saved before the next
+starts, with a randomised 2.5–6s gap in between, so fish.audio is never
+flooded. Progress is reported `(n/total)`; the loop runs in the service worker
+so it keeps going even if you close the popup. Per-chapter failures are
+counted, not fatal.
 
 ## Requirements at run time
 

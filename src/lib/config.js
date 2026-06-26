@@ -32,6 +32,12 @@ export const DEFAULTS = {
   //                audio_chapters.json. Companion mode only.
   //   "download" — save into the browser Downloads folder (works always).
   saveTarget: 'project',
+  // Auto-tag the script with Fish's emotion/pause tags before generating
+  // (POST /enhance/text). Off by default.
+  autoTag: false,
+  // Last-used selections, restored when the popup reopens.
+  lastProject: '',
+  lastEpisode: '',
 };
 
 const STORAGE_KEY = 'settings';

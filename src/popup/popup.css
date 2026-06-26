@@ -60,6 +60,8 @@ button.primary {
 button.link { border: none; background: none; font-size: 16px; padding: 2px 6px; }
 #generateAll { width: 100%; margin-top: 6px; padding: 8px; border-radius: 999px; }
 button:disabled { opacity: 0.5; cursor: default; }
+label.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); margin-top: 10px; }
+label.check input { width: auto; margin: 0; }
 .muted { color: var(--muted); font-size: 11px; }
 #filenamePreview { word-break: break-all; }
 #status { min-height: 16px; }

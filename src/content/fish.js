@@ -36,7 +36,7 @@ function callMain(op, payload, timeoutMs = 120000) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'fish:generate') {
-    callMain('generate', { text: msg.text, model: msg.voice, speed: msg.speed })
+    callMain('generate', { text: msg.text, model: msg.voice, speed: msg.speed, autoTag: msg.autoTag })
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;

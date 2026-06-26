@@ -83,6 +83,16 @@ export class StudioClient {
     );
   }
 
+  // Per-episode audio presence → { total, present, missing, missing_files }.
+  // `missing_files` are filenames like "CODE_Chapter_03.mp3" / "CODE_Introduction.mp3"
+  // — the authoritative list of sections still missing audio. Resolves by code
+  // (no title needed).
+  audioStatus(slug, code) {
+    return this._json(
+      `/projects/${encodeURIComponent(slug)}/episodes/${encodeURIComponent(code)}/audio-status`
+    );
+  }
+
   // Full narration (script + optional introduction) for an episode.
   scriptContent(slug, episodeId, title = '') {
     const q = title ? `?title=${encodeURIComponent(title)}` : '';
