@@ -46,8 +46,14 @@ async function init() {
   if (lastStatus && Date.now() - lastStatus.ts < 30 * 60 * 1000) status(lastStatus.text);
   const { queue } = await chrome.storage.local.get('queue');
   renderQueueBar(queue || []);
+  renderQueueList(queue || []);
   $('clearQueue').addEventListener('click', async () => {
     await chrome.runtime.sendMessage({ type: 'clearQueue' });
+  });
+  // Remove a single pending item (event-delegated).
+  $('queueList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.qremove');
+    if (btn) await chrome.runtime.sendMessage({ type: 'removeItem', id: btn.dataset.id });
   });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -277,16 +283,22 @@ function itemFromOption(opt) {
   };
 }
 
-// Queue every missing section of the CURRENT episode.
+const NORESP = 'no response from the background — reload the extension at chrome://extensions';
+const skipNote = (r) => (r.skipped ? ` (skipped ${r.skipped} already queued)` : '');
+
+// Queue every missing section of the CURRENT episode. Confirms first so a
+// stray double-click can't silently spend credits.
 async function onGenerateAll() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   const opts = [...$('chapter').options];
   if (!opts.length) return status('Nothing to queue — no missing audio.');
+  if (!confirm(`Queue ${opts.length} section(s) from ${ctx.episodeCode}?\nThis generates audio on fish.audio and uses your credits.`))
+    return;
   persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
   const items = opts.map(itemFromOption);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
-  status(r?.ok ? `Queued ${items.length} section(s) from ${ctx.episodeCode}.` : `Queue failed: ${r?.error || 'no response from the background — reload the extension at chrome://extensions'}`);
+  status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
 }
 
 // Queue every missing section of EVERY eligible episode in the project. The
@@ -295,6 +307,8 @@ async function onQueueProject() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   if (!ctx.projectSlug) return;
+  if (!confirm(`Queue ALL missing audio across the whole "${ctx.project}" project?\nThis can be a lot of sections and uses your fish.audio credits.`))
+    return;
   persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
   status(`Building a queue for all of ${ctx.project}…`);
   const r = await chrome.runtime.sendMessage({
@@ -308,8 +322,8 @@ async function onQueueProject() {
   });
   status(
     r?.ok
-      ? `Queued ${r.added} section(s) across ${r.episodes} episode(s).`
-      : `Queue failed: ${r?.error || 'no response from the background — reload the extension at chrome://extensions'}`
+      ? `Queued ${r.added} section(s) across ${r.episodes} episode(s)${skipNote(r)}.`
+      : `Queue failed: ${r?.error || NORESP}`
   );
 }
 
@@ -329,10 +343,41 @@ function renderQueueBar(queue) {
   $('queueInfo').textContent = `Queue: ${parts.join(' · ') || 'empty'}`;
 }
 
+const Q_GLYPH = { pending: '•', running: '⟳', done: '✓', failed: '✗' };
+
+function renderQueueList(queue) {
+  const ul = $('queueList');
+  ul.innerHTML = '';
+  if (!queue.length) {
+    ul.hidden = true;
+    return;
+  }
+  ul.hidden = false;
+  for (const it of queue) {
+    const li = document.createElement('li');
+    li.className = `qrow q-${it.status}`;
+    const label = document.createElement('span');
+    label.className = 'qlabel';
+    label.textContent = `${Q_GLYPH[it.status] || '•'} ${it.label}`;
+    if (it.status === 'failed' && it.error) label.title = it.error;
+    li.appendChild(label);
+    if (it.status === 'pending') {
+      const x = document.createElement('button');
+      x.className = 'qremove';
+      x.textContent = '✕';
+      x.title = 'Remove from queue';
+      x.dataset.id = it.id;
+      li.appendChild(x);
+    }
+    ul.appendChild(li);
+  }
+}
+
 // When the whole queue finishes, refresh the current episode's section list so
 // the ones we just made drop off.
 async function onQueueChanged(oldQ, newQ) {
   renderQueueBar(newQ);
+  renderQueueList(newQ);
   const active = newQ.some((i) => i.status === 'pending' || i.status === 'running');
   const wasActive = oldQ.some((i) => i.status === 'pending' || i.status === 'running');
   if (wasActive && !active && settings.mode === 'companion' && ctx.episodeCode) {
@@ -432,5 +477,6 @@ async function onGenerate() {
   }
 
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
-  status(r?.ok ? `Queued ${item.label}.` : `Queue failed: ${r?.error || 'no response from the background — reload the extension at chrome://extensions'}`);
+  if (!r?.ok) return status(`Queue failed: ${r?.error || NORESP}`);
+  status(r.added ? `Queued ${item.label}.` : 'Already in the queue.');
 }

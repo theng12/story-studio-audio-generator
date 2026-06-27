@@ -160,17 +160,47 @@ function mkItem(o) {
 
 let processing = false;
 
+// Identity of a companion section, used to dedupe (so a double-click — or
+// re-queuing an episode — can't add the same chapter twice and waste credits).
+function itemKey(it) {
+  return it.episodeCode && it.sectionSlug ? `${it.episodeCode}::${it.sectionSlug}` : null;
+}
+
 async function enqueue(items) {
-  if (!items?.length) return { ok: true, added: 0 };
+  if (!items?.length) return { ok: true, added: 0, skipped: 0 };
   let q = await getQueue();
   // If the previous run is fully finished, start a fresh queue so old
-  // done/failed entries don't pile up in the counter.
+  // done/failed entries don't pile up.
   if (!q.some((i) => i.status === 'pending' || i.status === 'running')) q = [];
-  for (const it of items) q.push({ ...it, id: it.id || `${Date.now()}_${_seq++}`, status: 'pending' });
+  // Don't re-add anything already pending/running.
+  const active = new Set(
+    q.filter((i) => i.status === 'pending' || i.status === 'running').map(itemKey).filter(Boolean)
+  );
+  let added = 0;
+  let skipped = 0;
+  for (const it of items) {
+    const key = itemKey(it);
+    if (key && active.has(key)) {
+      skipped++;
+      continue;
+    }
+    q.push({ ...it, id: it.id || `${Date.now()}_${_seq++}`, status: 'pending' });
+    if (key) active.add(key);
+    added++;
+  }
   await setQueue(q);
-  alarmCreate();
-  processQueue();
-  return { ok: true, added: items.length };
+  if (added) {
+    alarmCreate();
+    processQueue();
+  }
+  return { ok: true, added, skipped };
+}
+
+// Remove a single item from the queue — only if it hasn't started yet.
+async function removeFromQueue(id) {
+  const q = await getQueue();
+  await setQueue(q.filter((i) => !(i.id === id && i.status === 'pending')));
+  return { ok: true };
 }
 
 // Expand a whole project into queue items (done worker-side so the panel stays
@@ -352,6 +382,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg?.type) {
     case 'enqueue':
       reply(enqueue(msg.items));
+      return true;
+    case 'removeItem':
+      reply(removeFromQueue(msg.id));
       return true;
     case 'enqueueProject':
       reply(enqueueProject(msg.payload));

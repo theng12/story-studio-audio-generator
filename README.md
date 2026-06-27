@@ -131,8 +131,17 @@ from Story Studio when it reaches it.
 It's **durable**: the queue lives in `chrome.storage`, so it survives the side
 panel closing and even Chrome terminating the background worker — a
 `chrome.alarms` tick wakes the worker to resume any pending items (an
-interrupted item just re-runs). The queue bar shows `N queued · M done` and has
-a **clear** link; a finished item drops off the episode's list automatically.
+interrupted item just re-runs).
+
+**Management + safety:**
+- The queue bar (`N queued · M done · K failed`) is backed by a **visible list**
+  of every item with its status (`• pending`, `⟳ running`, `✓ done`, `✗ failed`).
+  Each pending item has an **✕** to remove it; **clear pending** empties the rest.
+- **Batch actions confirm first** — "Queue all chapters" / "Queue whole project"
+  ask before spending credits and show the count.
+- **De-duplicated** — queuing the same chapter again (e.g. an accidental
+  double-click, or re-queuing an episode) skips anything already pending/running,
+  so it can't generate twice and waste credits.
 
 ## Requirements at run time
 
