@@ -1,4 +1,12 @@
-import { getSettings, saveSettings, getCredentials, saveCredentials, DEFAULTS } from '../lib/config.js';
+import {
+  getSettings,
+  saveSettings,
+  getCredentials,
+  saveCredentials,
+  getApiKeys,
+  saveApiKeys,
+  DEFAULTS,
+} from '../lib/config.js';
 
 const $ = (id) => document.getElementById(id);
 const FIELDS = ['mode', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate', 'fishVoice'];
@@ -13,6 +21,9 @@ async function load() {
   const cred = await getCredentials();
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
+  const keys = await getApiKeys();
+  $('elevenLabsKey').value = keys.elevenLabsKey || '';
+  $('openaiKey').value = keys.openaiKey || '';
   toggleCompanion();
   $('mode').addEventListener('change', toggleCompanion);
   $('save').addEventListener('click', save);
@@ -25,6 +36,10 @@ async function save() {
   await saveCredentials({
     username: $('studioUsername').value.trim(),
     password: $('studioPassword').value, // not trimmed — passwords may have spaces
+  });
+  await saveApiKeys({
+    elevenLabsKey: $('elevenLabsKey').value.trim(),
+    openaiKey: $('openaiKey').value.trim(),
   });
   $('status').textContent = 'Saved.';
   setTimeout(() => ($('status').textContent = ''), 1500);

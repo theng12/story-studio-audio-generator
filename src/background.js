@@ -9,9 +9,10 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getSettings } from './lib/config.js';
+import { getSettings, getApiKeys } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { buildDownloadPath } from './lib/naming.js';
+import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate } from './lib/providers.js';
 
 const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
 const QUEUE_KEY = 'queue';
@@ -77,19 +78,35 @@ async function send(tabId, message) {
   return res;
 }
 
-// Generate one section's audio on fish.audio and save it (project or Downloads).
-async function generateAndSave(job, settings, tab) {
-  const voice = job.voice || settings.fishVoice;
-  if (!voice) throw new Error('No fish.audio voice selected. Pick one in Settings.');
+// Produce audio bytes for a job, routed by provider:
+//   - webSession (fish.audio): drive the page's content script.
+//   - apiKey (ElevenLabs, OpenAI): call the official API with the stored key.
+// Returns { base64, mime }.
+async function produceAudio(job, settings) {
+  const providerId = job.provider || settings.provider || 'fish';
+  const p = PROVIDERS[providerId] || PROVIDERS.fish;
   if (!job.text || !job.text.trim()) throw new Error('No script text to generate.');
 
-  const { base64, mime } = await send(tab.id, {
-    type: 'fish:generate',
-    text: job.text,
-    voice,
-    speed: job.speed ?? 1,
-    autoTag: !!job.autoTag,
-  });
+  if (p.type === 'webSession') {
+    const voice = job.voice || settings.voiceByProvider?.[providerId] || settings.fishVoice;
+    if (!voice) throw new Error(`No ${p.name} voice selected. Pick one in the panel.`);
+    const tab = await ensureFishTab();
+    return send(tab.id, {
+      type: 'fish:generate',
+      text: job.text,
+      voice,
+      speed: job.speed ?? 1,
+      autoTag: !!job.autoTag,
+    });
+  }
+  // apiKey provider — no browser tab needed.
+  const keys = await getApiKeys();
+  return apiGenerate(providerId, { text: job.text, voice: job.voice, keys });
+}
+
+// Generate one section's audio and save it (project folder or Downloads).
+async function generateAndSave(job, settings) {
+  const { base64, mime } = await produceAudio(job, settings);
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
 
   if (job.target === 'project' && job.slug && job.episodeCode) {
@@ -206,7 +223,7 @@ async function removeFromQueue(id) {
 // Expand a whole project into queue items (done worker-side so the panel stays
 // snappy). One item per missing section (intro + chapters) of every episode
 // whose script is done but audio isn't.
-async function enqueueProject({ slug, target, voice, autoTag }) {
+async function enqueueProject({ slug, target, voice, autoTag, provider }) {
   const settings = await getSettings();
   const client = new StudioClient(settings.studioBaseUrl);
   const raw = await client.listEpisodes(slug);
@@ -222,7 +239,7 @@ async function enqueueProject({ slug, target, voice, autoTag }) {
     } catch {
       continue;
     }
-    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', target, voice, autoTag })) {
+    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', target, voice, autoTag, provider })) {
       items.push(it);
     }
   }
@@ -230,7 +247,7 @@ async function enqueueProject({ slug, target, voice, autoTag }) {
 }
 
 // Build queue items from an audio-status missing_files list.
-function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag }) {
+function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag, provider }) {
   const out = [];
   for (const f of missingFiles || []) {
     const isIntro = /_Introduction\.(mp3|wav)$/i.test(f);
@@ -247,6 +264,7 @@ function missingSectionItems(missingFiles, { slug, code, title, target, voice, a
         sectionSlug: isIntro ? 'Introduction' : `Chapter_${numStr}`,
         chapterNumber: num,
         target,
+        provider,
         voice,
         autoTag,
         // tokens for Downloads naming:
@@ -276,7 +294,6 @@ async function processQueue() {
   try {
     const settings = await getSettings();
     const client = new StudioClient(settings.studioBaseUrl);
-    let tab = null;
     for (;;) {
       let q = await getQueue();
       const idx = q.findIndex((i) => i.status === 'pending');
@@ -287,11 +304,11 @@ async function processQueue() {
       const pos = q.filter((i) => i.status === 'done' || i.status === 'failed').length + 1;
       await writeStatus(`(${pos}/${q.length}) ${item.label}…`, 'running');
       try {
-        if (!tab) tab = await ensureFishTab();
         const text = await fetchItemText(item, client);
         if (!text.trim()) throw new Error('no script text on disk');
         const job = {
           text,
+          provider: item.provider,
           voice: item.voice,
           target: item.target,
           autoTag: item.autoTag,
@@ -310,7 +327,7 @@ async function processQueue() {
             chapterLabel: item.chapterLabel,
           });
         }
-        const r = await generateAndSave(job, settings, tab);
+        const r = await generateAndSave(job, settings);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
         if (it) {
@@ -371,10 +388,15 @@ chrome.alarms?.onAlarm?.addListener((a) => {
   if (a.name === ALARM) processQueue();
 });
 
-async function listVoices() {
-  const tab = await ensureFishTab();
-  const { voices } = await send(tab.id, { type: 'fish:listVoices' });
-  return { ok: true, voices };
+async function listVoices(providerId) {
+  const p = PROVIDERS[providerId] || PROVIDERS.fish;
+  if (p.type === 'webSession') {
+    const tab = await ensureFishTab();
+    const { voices } = await send(tab.id, { type: 'fish:listVoices' });
+    return { ok: true, voices };
+  }
+  const keys = await getApiKeys();
+  return { ok: true, voices: await listApiVoices(providerId, keys) };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -396,7 +418,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       reply(getQueue().then((queue) => ({ ok: true, queue })));
       return true;
     case 'listVoices':
-      reply(listVoices());
+      reply(listVoices(msg.provider));
       return true;
     default:
       return false;

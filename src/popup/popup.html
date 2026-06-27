@@ -4,13 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="popup.css" />
-    <title>Story Studio Audio Generator</title>
+    <title>Story Studio TTS</title>
   </head>
   <body>
     <header>
-      <h1>Story Studio Audio Generator → Story Studio</h1>
+      <h1>Story Studio TTS</h1>
       <button id="openOptions" class="link" title="Settings">⚙</button>
     </header>
+
+    <label>Provider
+      <select id="provider">
+        <option value="fish">fish.audio</option>
+        <option value="elevenlabs">ElevenLabs</option>
+        <option value="openai">OpenAI TTS</option>
+      </select>
+    </label>
 
     <!-- Companion mode: pick from a running Story Studio server -->
     <section id="companionPane" hidden>
@@ -41,7 +49,7 @@
     <label>Voice
       <div class="row">
         <select id="voice"></select>
-        <button id="loadVoices" title="Load voices from fish.audio">↻</button>
+        <button id="loadVoices" title="Load voices from the provider">↻</button>
       </div>
     </label>
 
@@ -52,7 +60,7 @@
       </select>
     </label>
 
-    <label class="check">
+    <label class="check" id="autoTagLabel">
       <input type="checkbox" id="autoTag" />
       Auto-tag emotions &amp; pauses (Fish "Auto Tag All")
     </label>

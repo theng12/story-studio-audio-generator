@@ -1,9 +1,27 @@
-# Story Studio Audio Generator for Story Studio
+# Story Studio TTS
 
 A Chrome (Manifest V3) extension that turns **Story Studio KH** scripts into
-narration audio using your **paid fish.audio web plan** — and saves each file
-with the correct name, so you're not paying for the Fish API or doing it by
-hand.
+narration audio using a TTS provider you already pay for — and saves each file
+with the correct name, into the right project folder.
+
+## Providers
+
+Pick the provider in the side panel. Two kinds:
+
+- **Web-session — fish.audio.** Driven through your logged-in fish.audio tab
+  (uses your web plan; no API key). See the fish-specific details below.
+- **API-key — ElevenLabs, OpenAI.** The service worker calls the official API
+  directly with a key you paste in **Settings** (stored locally, never synced).
+  No browser tab needed.
+  - **ElevenLabs** draws from your subscription's character quota (same as the
+    web app). Voices are pulled from your account.
+  - **OpenAI TTS** has fixed voices (alloy, nova, …) and a 4096-char request
+    cap, so long chapters are split into sentence-boundary chunks and the MP3s
+    are joined automatically.
+
+Auto-tag (emotion/pause tags) is a fish.audio-only feature and only shows for
+that provider. Everything else — the queue, save-back, naming — is shared
+across providers.
 
 ## How it works
 

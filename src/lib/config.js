@@ -24,7 +24,11 @@ export const DEFAULTS = {
   // Filename template (extension appended automatically).
   // Tokens: {episodeCode} {chapterNum} {chapterLabel} {project}
   filenameTemplate: '{episodeCode} - {chapterNum} {chapterLabel}',
-  // Default fish.audio voice id/name to apply (resolved during recon).
+  // Active TTS provider: 'fish' | 'elevenlabs' | 'openai'.
+  provider: 'fish',
+  // Remembered voice per provider (so switching providers keeps each choice).
+  voiceByProvider: {}, // { fish: '<id>', elevenlabs: '<id>', openai: 'alloy' }
+  // Default fish.audio voice id/name (legacy; mirrored into voiceByProvider).
   fishVoice: '',
   // Where generated audio goes:
   //   "project"  — POST back to Story Studio so it lands in the episode's
@@ -65,4 +69,18 @@ export async function getCredentials() {
 
 export async function saveCredentials({ username, password }) {
   await chrome.storage.local.set({ [CRED_KEY]: { username, password } });
+}
+
+// Provider API keys (ElevenLabs, OpenAI). LOCAL storage only — these are
+// secrets and must never sync to the Google account.
+const KEYS_KEY = 'providerKeys';
+
+export async function getApiKeys() {
+  const stored = await chrome.storage.local.get(KEYS_KEY);
+  return stored[KEYS_KEY] || { elevenLabsKey: '', openaiKey: '' };
+}
+
+export async function saveApiKeys(patch) {
+  const current = await getApiKeys();
+  await chrome.storage.local.set({ [KEYS_KEY]: { ...current, ...patch } });
 }

@@ -5,6 +5,15 @@ import { buildDownloadPath } from '../lib/naming.js';
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
 const pad = (n) => String(n).padStart(2, '0');
+const currentProvider = () => $('provider')?.value || settings.provider || 'fish';
+
+// Build a settings patch that remembers the chosen voice for the active provider.
+function rememberVoice(voice) {
+  const p = currentProvider();
+  const patch = { voiceByProvider: { ...(settings.voiceByProvider || {}), [p]: voice } };
+  if (p === 'fish') patch.fishVoice = voice; // keep legacy key in sync
+  return patch;
+}
 
 let settings;
 let client; // StudioClient (companion mode)
@@ -36,7 +45,17 @@ async function init() {
     $('saveTargetLabel').hidden = true;
   }
 
-  // Auto-tag toggle (both modes).
+  // Provider selector. Switching provider reloads its voices and shows the
+  // auto-tag option only for fish.audio (it's a fish-specific feature).
+  $('provider').value = settings.provider || 'fish';
+  applyProviderUI();
+  $('provider').addEventListener('change', async () => {
+    await persist({ provider: currentProvider() });
+    applyProviderUI();
+    await initVoices();
+  });
+
+  // Auto-tag toggle.
   $('autoTag').checked = !!settings.autoTag;
   $('autoTag').addEventListener('change', () => persist({ autoTag: $('autoTag').checked }));
 
@@ -80,6 +99,11 @@ async function init() {
 // Persist a settings patch and keep our local copy in sync.
 async function persist(patch) {
   settings = await saveSettings(patch);
+}
+
+// Show provider-specific UI bits (auto-tag is a fish.audio-only feature).
+function applyProviderUI() {
+  $('autoTagLabel').hidden = currentProvider() !== 'fish';
 }
 
 // ── Companion mode ─────────────────────────────────────────────────────────
@@ -274,6 +298,7 @@ function itemFromOption(opt) {
     sectionSlug: opt.value,
     chapterNumber: opt.dataset.num || null,
     target: $('saveTarget').value,
+    provider: currentProvider(),
     voice: $('voice').value,
     autoTag: $('autoTag').checked,
     project: ctx.project || '',
@@ -293,9 +318,9 @@ async function onGenerateAll() {
   if (!voice) return status('Pick a voice first (↻ to load).');
   const opts = [...$('chapter').options];
   if (!opts.length) return status('Nothing to queue — no missing audio.');
-  if (!confirm(`Queue ${opts.length} section(s) from ${ctx.episodeCode}?\nThis generates audio on fish.audio and uses your credits.`))
+  if (!confirm(`Queue ${opts.length} section(s) from ${ctx.episodeCode}?\nThis generates audio with ${currentProvider()} and uses your credits.`))
     return;
-  persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
+  persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
   const items = opts.map(itemFromOption);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
   status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
@@ -307,15 +332,16 @@ async function onQueueProject() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   if (!ctx.projectSlug) return;
-  if (!confirm(`Queue ALL missing audio across the whole "${ctx.project}" project?\nThis can be a lot of sections and uses your fish.audio credits.`))
+  if (!confirm(`Queue ALL missing audio across the whole "${ctx.project}" project?\nThis can be a lot of sections and uses your ${currentProvider()} credits.`))
     return;
-  persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
+  persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
   status(`Building a queue for all of ${ctx.project}…`);
   const r = await chrome.runtime.sendMessage({
     type: 'enqueueProject',
     payload: {
       slug: ctx.projectSlug,
       target: $('saveTarget').value,
+      provider: currentProvider(),
       voice,
       autoTag: $('autoTag').checked,
     },
@@ -386,7 +412,7 @@ async function onQueueChanged(oldQ, newQ) {
   }
 }
 
-// ── Voices ─────────────────────────────────────────────────────────────────
+// ── Voices (per provider) ────────────────────────────────────────────────────
 function renderVoices(voices) {
   const sel = $('voice');
   sel.innerHTML = '';
@@ -396,20 +422,33 @@ function renderVoices(voices) {
     opt.textContent = v.title || v.id;
     sel.appendChild(opt);
   }
-  if (settings.fishVoice) sel.value = settings.fishVoice;
+  const remembered =
+    settings.voiceByProvider?.[currentProvider()] || (currentProvider() === 'fish' ? settings.fishVoice : '');
+  if (remembered) sel.value = remembered;
+}
+
+async function getVoiceCache() {
+  return (await chrome.storage.local.get('voicesCache')).voicesCache || {};
 }
 
 async function initVoices() {
-  const { voices } = await chrome.storage.local.get('voices');
-  if (Array.isArray(voices) && voices.length) renderVoices(voices);
+  const cache = await getVoiceCache();
+  const v = cache[currentProvider()];
+  if (Array.isArray(v) && v.length) renderVoices(v);
   else await loadVoices();
 }
 
 async function loadVoices() {
-  status('Loading voices from fish.audio…');
-  const res = await chrome.runtime.sendMessage({ type: 'listVoices' });
-  if (!res?.ok) return status(`Couldn't load voices: ${res?.error || 'open fish.audio and log in'}`);
-  await chrome.storage.local.set({ voices: res.voices });
+  const p = currentProvider();
+  status(`Loading ${p} voices…`);
+  const res = await chrome.runtime.sendMessage({ type: 'listVoices', provider: p });
+  if (!res?.ok) {
+    $('voice').innerHTML = '';
+    return status(`Couldn't load ${p} voices: ${res?.error || NORESP}`);
+  }
+  const cache = await getVoiceCache();
+  cache[p] = res.voices;
+  await chrome.storage.local.set({ voicesCache: cache });
   renderVoices(res.voices);
   status('');
 }
@@ -449,7 +488,7 @@ async function onGenerate() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   const autoTag = $('autoTag').checked;
-  persist({ fishVoice: voice, saveTarget: $('saveTarget').value });
+  persist({ ...rememberVoice(voice), saveTarget: $('saveTarget').value });
 
   let item;
   if (settings.mode === 'paste') {
@@ -461,6 +500,7 @@ async function onGenerate() {
       kind: 'paste',
       text, // worker uses this directly (no Story Studio fetch)
       target: 'download',
+      provider: currentProvider(),
       voice,
       autoTag,
       label,
