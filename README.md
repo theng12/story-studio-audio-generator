@@ -111,16 +111,28 @@ error). Splitting long chapters and stitching the parts is a follow-up.
   password once in **Settings** (stored locally on this device, not synced)
   and the popup signs in automatically when a remote server returns 401.
 
-## Generate all chapters
+## The queue — set it and walk away
 
-In companion mode the popup has a **Generate all chapters** button. It
-pre-fetches every missing section's text (intro + chapters), then the worker
-generates + saves them one at a time — **fully sequential and human-paced**:
-each chapter waits for the audio to come back and be saved before the next
-starts, with a randomised 2.5–6s gap in between, so fish.audio is never
-flooded. Progress is reported `(n/total)`; the loop runs in the service worker
-so it keeps going even if you close the popup. Per-chapter failures are
-counted, not fatal.
+All generation flows through a single **persistent queue** in the worker, so you
+can pile up a lot of work and leave:
+
+- **Generate & save** — queue the one selected section.
+- **Queue all chapters (this episode)** — queue every missing section of the
+  current episode (intro + chapters).
+- **Queue whole project** — queue every missing section of *every* episode in
+  the project that still needs audio. Walk away; come back to a finished project.
+
+The worker processes the queue **one item at a time, human-paced** (it waits for
+each section's audio to come back and be saved, then a randomised 2.5–6s gap
+before the next) — so fish.audio is never flooded no matter how much you queue.
+Only the section identifiers are queued; the worker fetches each section's text
+from Story Studio when it reaches it.
+
+It's **durable**: the queue lives in `chrome.storage`, so it survives the side
+panel closing and even Chrome terminating the background worker — a
+`chrome.alarms` tick wakes the worker to resume any pending items (an
+interrupted item just re-runs). The queue bar shows `N queued · M done` and has
+a **clear** link; a finished item drops off the episode's list automatically.
 
 ## Requirements at run time
 

@@ -62,7 +62,14 @@
     </div>
 
     <button id="generate" class="primary">Generate &amp; save</button>
-    <button id="generateAll" hidden>Generate all chapters</button>
+    <button id="generateAll" hidden>Queue all chapters (this episode)</button>
+    <button id="queueProject" hidden>Queue whole project</button>
+
+    <div id="queueBar" class="queuebar" hidden>
+      <span id="queueInfo"></span>
+      <button id="clearQueue" class="link">clear</button>
+    </div>
+
     <p id="status" class="muted"></p>
 
     <script type="module" src="popup.js"></script>

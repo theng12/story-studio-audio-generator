@@ -10,7 +10,6 @@ let settings;
 let client; // StudioClient (companion mode)
 let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
 let episodesByProject = {}; // slug -> [episode objects with .status]
-let scriptCache = {}; // episodeCode -> script-content response (for intro text)
 
 // An episode is worth showing when its script is done but audio isn't.
 const isEligible = (ep) => !!(ep.status && ep.status.script && !ep.status.audio);
@@ -45,14 +44,23 @@ async function init() {
   // and keep it live — so closing/reopening the popup doesn't lose progress.
   const { lastStatus } = await chrome.storage.local.get('lastStatus');
   if (lastStatus && Date.now() - lastStatus.ts < 30 * 60 * 1000) status(lastStatus.text);
+  const { queue } = await chrome.storage.local.get('queue');
+  renderQueueBar(queue || []);
+  $('clearQueue').addEventListener('click', async () => {
+    await chrome.runtime.sendMessage({ type: 'clearQueue' });
+  });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.lastStatus) status(changes.lastStatus.newValue?.text || '');
+    if (area !== 'local') return;
+    if (changes.lastStatus) status(changes.lastStatus.newValue?.text || '');
+    if (changes.queue) onQueueChanged(changes.queue.oldValue || [], changes.queue.newValue || []);
   });
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
     $('generateAll').hidden = false;
+    $('queueProject').hidden = false;
     $('generateAll').addEventListener('click', onGenerateAll);
+    $('queueProject').addEventListener('click', onQueueProject);
     await initCompanion();
   } else {
     $('pastePane').hidden = false;
@@ -243,79 +251,94 @@ async function loadSections() {
   updatePreview();
 }
 
-// Fetch the narration text for one section (chapter or intro).
-async function sectionText(kind, num) {
-  if (kind === 'intro') {
-    if (!scriptCache[ctx.episodeCode]) {
-      scriptCache[ctx.episodeCode] = await client.scriptContent(
-        ctx.projectSlug,
-        ctx.episodeCode,
-        ctx.episodeTitle
-      );
-    }
-    return scriptCache[ctx.episodeCode]?.introduction?.content || '';
-  }
-  const res = await client.chapterContent(ctx.projectSlug, ctx.episodeCode, num, ctx.episodeTitle);
-  return res.content || res.text || '';
+// ── Queue ───────────────────────────────────────────────────────────────────
+//
+// All generation goes through the worker's persistent queue (one item at a
+// time, human-paced, survives the panel closing). The panel just builds items
+// — identifiers only; the worker fetches each section's text from Story Studio
+// when it gets to it.
+
+// Build a queue item from a companion section <option>.
+function itemFromOption(opt) {
+  return {
+    kind: opt.dataset.kind, // 'intro' | 'chapter'
+    slug: ctx.projectSlug,
+    episodeCode: ctx.episodeCode,
+    episodeTitle: ctx.episodeTitle,
+    sectionSlug: opt.value,
+    chapterNumber: opt.dataset.num || null,
+    target: $('saveTarget').value,
+    voice: $('voice').value,
+    autoTag: $('autoTag').checked,
+    project: ctx.project || '',
+    chapterNum: opt.dataset.num || '',
+    chapterLabel: opt.dataset.label || '',
+    label: `${ctx.episodeCode} ${opt.dataset.label || opt.value}`,
+  };
 }
 
-// ── Batch: generate all missing sections ────────────────────────────────────
+// Queue every missing section of the CURRENT episode.
 async function onGenerateAll() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
-  const target = $('saveTarget').value;
-  const slug = ctx.projectSlug;
   const opts = [...$('chapter').options];
-  if (!opts.length) return status('Nothing to generate — no missing audio.');
-
-  setBusy(true);
-  status('Loading script text…');
-  try {
-    const chapters = [];
-    for (const opt of opts) {
-      const text = await sectionText(opt.dataset.kind, opt.dataset.num);
-      if (!text.trim()) continue; // skip empty/unexpanded sections
-      chapters.push({
-        slug: opt.value,
-        chapterNumber: opt.dataset.num || null,
-        label: opt.dataset.label,
-        text,
-        downloadPath: buildDownloadPath(settings, sectionTokens(opt)),
-      });
-    }
-    if (!chapters.length) return status('No sections with script text found.');
-
-    persist({ saveTarget: target, fishVoice: voice });
-    status(`Generating ${chapters.length} section(s)…`);
-    const result = await chrome.runtime.sendMessage({
-      type: 'runBatch',
-      batch: {
-        slug,
-        episodeCode: ctx.episodeCode,
-        target,
-        voice,
-        autoTag: $('autoTag').checked,
-        chapters,
-      },
-    });
-    if (result?.ok) {
-      const tail = result.failed ? ` (${result.failed} failed)` : '';
-      await invalidateEpisodes(ctx.projectSlug);
-      await loadSections();
-      status(`✓ Done: ${result.succeeded}/${result.total} saved${tail}.`);
-    } else {
-      status(`Batch failed: ${result?.error || 'unknown error'}`);
-    }
-  } catch (e) {
-    status(`Batch error: ${e.message || e}`);
-  } finally {
-    setBusy(false);
-  }
+  if (!opts.length) return status('Nothing to queue — no missing audio.');
+  persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
+  const items = opts.map(itemFromOption);
+  const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
+  status(r?.ok ? `Queued ${items.length} section(s) from ${ctx.episodeCode}.` : `Queue failed: ${r?.error}`);
 }
 
-function setBusy(b) {
-  $('generate').disabled = b;
-  $('generateAll').disabled = b;
+// Queue every missing section of EVERY eligible episode in the project. The
+// worker expands the project (it'd be too many calls to do here).
+async function onQueueProject() {
+  const voice = $('voice').value;
+  if (!voice) return status('Pick a voice first (↻ to load).');
+  if (!ctx.projectSlug) return;
+  persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
+  status(`Building a queue for all of ${ctx.project}…`);
+  const r = await chrome.runtime.sendMessage({
+    type: 'enqueueProject',
+    payload: {
+      slug: ctx.projectSlug,
+      target: $('saveTarget').value,
+      voice,
+      autoTag: $('autoTag').checked,
+    },
+  });
+  status(
+    r?.ok
+      ? `Queued ${r.added} section(s) across ${r.episodes} episode(s).`
+      : `Queue failed: ${r?.error}`
+  );
+}
+
+function renderQueueBar(queue) {
+  const active = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
+  const done = queue.filter((i) => i.status === 'done').length;
+  const failed = queue.filter((i) => i.status === 'failed').length;
+  if (!queue.length) {
+    $('queueBar').hidden = true;
+    return;
+  }
+  $('queueBar').hidden = false;
+  const parts = [];
+  if (active) parts.push(`${active} queued`);
+  if (done) parts.push(`${done} done`);
+  if (failed) parts.push(`${failed} failed`);
+  $('queueInfo').textContent = `Queue: ${parts.join(' · ') || 'empty'}`;
+}
+
+// When the whole queue finishes, refresh the current episode's section list so
+// the ones we just made drop off.
+async function onQueueChanged(oldQ, newQ) {
+  renderQueueBar(newQ);
+  const active = newQ.some((i) => i.status === 'pending' || i.status === 'running');
+  const wasActive = oldQ.some((i) => i.status === 'pending' || i.status === 'running');
+  if (wasActive && !active && settings.mode === 'companion' && ctx.episodeCode) {
+    await invalidateEpisodes(ctx.projectSlug);
+    await loadSections();
+  }
 }
 
 // ── Voices ─────────────────────────────────────────────────────────────────
@@ -376,56 +399,38 @@ function updatePreview() {
   }
 }
 
+// Queue just the selected section (or the pasted text).
 async function onGenerate() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
-  const target = $('saveTarget').value;
   const autoTag = $('autoTag').checked;
+  persist({ fishVoice: voice, saveTarget: $('saveTarget').value });
 
-  let text;
-  let sectionSlug = '';
-  let chapterNumber = '';
-  let label = '';
-  const tokens = currentTokens();
+  let item;
   if (settings.mode === 'paste') {
-    text = $('pasteText').value.trim();
-    label = $('pasteLabel').value.trim() || $('pasteCode').value.trim() || 'audio';
+    const text = $('pasteText').value.trim();
+    if (!text) return status('Paste some script text first.');
+    const code = $('pasteCode').value.trim() || 'audio';
+    const label = $('pasteLabel').value.trim() || code;
+    item = {
+      kind: 'paste',
+      text, // worker uses this directly (no Story Studio fetch)
+      target: 'download',
+      voice,
+      autoTag,
+      label,
+      episodeCode: code,
+      episodeTitle: '',
+      project: '',
+      chapterNum: '',
+      chapterLabel: $('pasteLabel').value.trim() || '',
+    };
   } else {
     const opt = $('chapter').selectedOptions[0];
     if (!opt) return status('Nothing to generate — no missing audio.');
-    sectionSlug = opt.value;
-    chapterNumber = opt.dataset.num || '';
-    label = opt.dataset.label || sectionSlug;
-    status('Loading script text…');
-    text = await sectionText(opt.dataset.kind, opt.dataset.num);
-  }
-  if (!text) return status('No script text to generate.');
-
-  persist({ fishVoice: voice, saveTarget: target });
-
-  const job = { text, voice, target, autoTag, label };
-  if (target === 'project') {
-    job.slug = ctx.projectSlug;
-    job.episodeCode = ctx.episodeCode;
-    job.sectionSlug = sectionSlug;
-    job.chapterNumber = chapterNumber;
-  } else {
-    job.downloadPath = buildDownloadPath(settings, tokens);
+    item = itemFromOption(opt);
   }
 
-  setBusy(true);
-  status(target === 'project' ? `Generating ${label}…` : 'Generating on fish.audio…');
-  const result = await chrome.runtime.sendMessage({ type: 'runJob', job });
-  setBusy(false);
-  if (result?.ok) {
-    // Refresh the section list so the one we just made drops off the list,
-    // then show the success message (loadSections clears the status line).
-    if (settings.mode === 'companion') {
-      await invalidateEpisodes(ctx.projectSlug);
-      await loadSections();
-    }
-    status(target === 'project' ? `✓ Saved to project: ${result.savedAs}` : `✓ Saved: ${result.savedAs}`);
-  } else {
-    status(`Failed: ${result?.error || 'unknown error'}`);
-  }
+  const r = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
+  status(r?.ok ? `Queued ${item.label}.` : `Queue failed: ${r?.error}`);
 }

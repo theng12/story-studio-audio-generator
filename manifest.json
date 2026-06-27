@@ -3,7 +3,7 @@
   "name": "Story Studio Audio Generator for Story Studio",
   "version": "0.1.0",
   "description": "Generate narration audio on fish.audio from your Story Studio KH scripts and save each file with the correct name.",
-  "permissions": ["downloads", "storage", "scripting", "tabs", "sidePanel"],
+  "permissions": ["downloads", "storage", "scripting", "tabs", "sidePanel", "alarms"],
   "host_permissions": [
     "http://localhost:8766/*",
     "http://127.0.0.1:8766/*",

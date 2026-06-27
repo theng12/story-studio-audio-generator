@@ -1,28 +1,27 @@
-// Service worker — orchestrates a TTS job end to end.
+// Service worker — a persistent, resumable generation QUEUE.
 //
-// Flow (single job):
-//   popup → background { type: "runJob", job }
-//   background → fish.audio content bridge { type: "fish:generate", text, voice }
-//   bridge → MAIN world → POST api.fish.audio/task (stream) → MP3 bytes
-//   bridge → background { base64, mime }
-//   background → save (project ingest OR chrome.downloads)
+// The panel enqueues work (a section, a whole episode, or a whole project);
+// this worker processes one item at a time, human-paced, writing each result
+// to the Story Studio project folder (or Downloads). The queue lives in
+// chrome.storage, so it survives the panel closing AND the worker being
+// killed: a chrome.alarms tick wakes the worker to resume any pending items.
 //
-// Batch ("generate all chapters") reuses the same generate-and-save core in a
-// sequential loop over one fish.audio tab, emitting progress as it goes. It
-// runs in the worker so it survives the popup being closed.
+// Strictly sequential — only ever one fish.audio generation in flight, so the
+// site is never flooded no matter how much you queue.
 
 import { getSettings } from './lib/config.js';
+import { StudioClient } from './lib/story-studio.js';
+import { buildDownloadPath } from './lib/naming.js';
 
 const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
+const QUEUE_KEY = 'queue';
+const ALARM = 'queueTick';
 
-// Clicking the toolbar icon opens the persistent side panel (not a popup), so
-// the UI keeps its state and any running generation stays visible.
+// Clicking the toolbar icon opens the persistent side panel (not a popup).
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
-// When the extension is installed or updated, content scripts already running
-// in open fish.audio tabs are STALE (they keep the old code until the page
-// reloads). Reload those tabs so they pick up the new content scripts —
-// otherwise a generate would run against outdated code.
+// On install/update, reload open fish.audio tabs so their content scripts
+// aren't stale (they keep old code until the page reloads).
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
@@ -32,8 +31,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 
-// Find a usable fish.audio tab, or open one in the background and wait for it
-// to finish loading so the content scripts are live.
+// ── fish.audio tab plumbing ─────────────────────────────────────────────────
 async function ensureFishTab() {
   const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
   const ready = tabs.find((t) => t.status === 'complete');
@@ -43,8 +41,7 @@ async function ensureFishTab() {
     const listener = (tabId, info) => {
       if (tabId === tab.id && info.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
-        // Give the content scripts a beat to initialise.
-        setTimeout(resolve, 800);
+        setTimeout(resolve, 800); // let content scripts initialise
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
@@ -58,8 +55,7 @@ async function send(tabId, message) {
   return res;
 }
 
-// Generate one chapter's audio on fish.audio and save it (project folder via
-// Story Studio, or the browser Downloads folder). Returns a result summary.
+// Generate one section's audio on fish.audio and save it (project or Downloads).
 async function generateAndSave(job, settings, tab) {
   const voice = job.voice || settings.fishVoice;
   if (!voice) throw new Error('No fish.audio voice selected. Pick one in Settings.');
@@ -74,8 +70,6 @@ async function generateAndSave(job, settings, tab) {
   });
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
 
-  // v2: hand the audio back to Story Studio so it files it into the episode's
-  // real audio folder. Requires companion identifiers (slug + code + chapter).
   if (job.target === 'project' && job.slug && job.episodeCode) {
     const base = (settings.studioBaseUrl || '').replace(/\/+$/, '');
     const url = `${base}/api/projects/${encodeURIComponent(job.slug)}/episodes/${encodeURIComponent(
@@ -103,7 +97,7 @@ async function generateAndSave(job, settings, tab) {
       throw new Error(`Story Studio rejected the audio: ${detail}`);
     }
     const j = await res.json();
-    return { ok: true, savedAs: j.saved_as, savedIn: j.audio_dir, target: 'project' };
+    return { savedAs: j.saved_as, savedIn: j.audio_dir, target: 'project' };
   }
 
   const filename = job.downloadPath.replace(/\.(mp3|wav)$/i, '') + `.${ext}`;
@@ -113,11 +107,10 @@ async function generateAndSave(job, settings, tab) {
     saveAs: false,
     conflictAction: 'uniquify',
   });
-  return { ok: true, downloadId, savedAs: filename, target: 'download' };
+  return { downloadId, savedAs: filename, target: 'download' };
 }
 
-// Persist the latest status to storage so the popup can show it even after
-// being closed and reopened (the work continues in the worker regardless).
+// ── status (persisted so the panel survives close/reopen) ───────────────────
 async function writeStatus(text, kind = 'info') {
   try {
     await chrome.storage.local.set({ lastStatus: { text, kind, ts: Date.now() } });
@@ -126,77 +119,205 @@ async function writeStatus(text, kind = 'info') {
   }
 }
 
-async function runJob(job) {
-  const settings = await getSettings();
-  const tab = await ensureFishTab();
-  await writeStatus(`Generating ${job.label || 'audio'}…`, 'running');
-  try {
-    const r = await generateAndSave(job, settings, tab);
-    await writeStatus(`✓ Saved ${r.savedAs}`, 'done');
-    return r;
-  } catch (e) {
-    await writeStatus(`✗ ${job.label || 'audio'}: ${e.message || e}`, 'error');
-    throw e;
-  }
-}
-
-// Best-effort progress ping to the popup (no-op if it's closed).
-function emit(message) {
-  chrome.runtime.sendMessage(message).catch(() => {});
-}
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Human-like pause between chapters: a randomised gap so we don't hammer
-// fish.audio. Each generation already waits for the audio + the save before
-// the next starts; this just adds polite spacing on top.
-function politeGap() {
-  return 2500 + Math.floor(Math.random() * 3500); // 2.5–6.0s
+const politeGap = () => 2500 + Math.floor(Math.random() * 3500); // 2.5–6s
+
+// ── the queue ───────────────────────────────────────────────────────────────
+async function getQueue() {
+  const { queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
+  return queue;
+}
+async function setQueue(q) {
+  await chrome.storage.local.set({ [QUEUE_KEY]: q });
 }
 
-// Sequentially generate + save every section in `batch.chapters`. Each entry is
-// { chapterNumber, slug, label, text, downloadPath }. Shared fields (slug base,
-// episodeCode, target, voice, autoTag) live on the batch.
-async function runBatch(batch) {
+let _seq = 0;
+function mkItem(o) {
+  return { id: `${Date.now()}_${_seq++}`, status: 'pending', ...o };
+}
+
+let processing = false;
+
+async function enqueue(items) {
+  if (!items?.length) return { ok: true, added: 0 };
+  let q = await getQueue();
+  // If the previous run is fully finished, start a fresh queue so old
+  // done/failed entries don't pile up in the counter.
+  if (!q.some((i) => i.status === 'pending' || i.status === 'running')) q = [];
+  for (const it of items) q.push({ ...it, id: it.id || `${Date.now()}_${_seq++}`, status: 'pending' });
+  await setQueue(q);
+  chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
+  processQueue();
+  return { ok: true, added: items.length };
+}
+
+// Expand a whole project into queue items (done worker-side so the panel stays
+// snappy). One item per missing section (intro + chapters) of every episode
+// whose script is done but audio isn't.
+async function enqueueProject({ slug, target, voice, autoTag }) {
   const settings = await getSettings();
-  const tab = await ensureFishTab();
-  const total = batch.chapters.length;
-  const results = [];
-  let succeeded = 0;
-
-  for (let i = 0; i < total; i++) {
-    const ch = batch.chapters[i];
-    const label = ch.label || ch.slug || `Chapter ${ch.chapterNumber}`;
-    emit({ type: 'batchProgress', index: i, total, label, state: 'running' });
-    await writeStatus(`(${i + 1}/${total}) generating ${label}…`, 'running');
+  const client = new StudioClient(settings.studioBaseUrl);
+  const raw = await client.listEpisodes(slug);
+  const eps = (Array.isArray(raw) ? raw : raw.episodes || []).filter(
+    (e) => e.status?.script && !e.status?.audio
+  );
+  const items = [];
+  for (const ep of eps) {
+    const code = ep.episode_code || ep.code;
+    let audio;
     try {
-      const job = {
-        text: ch.text,
-        voice: batch.voice,
-        target: batch.target,
-        slug: batch.slug,
-        episodeCode: batch.episodeCode,
-        chapterNumber: ch.chapterNumber,
-        sectionSlug: ch.slug,
-        autoTag: batch.autoTag,
-        downloadPath: ch.downloadPath,
-      };
-      const r = await generateAndSave(job, settings, tab);
-      succeeded++;
-      results.push({ label, ok: true, savedAs: r.savedAs });
-      emit({ type: 'batchProgress', index: i, total, label, state: 'done', savedAs: r.savedAs });
-    } catch (e) {
-      const error = String(e.message || e);
-      results.push({ label, ok: false, error });
-      emit({ type: 'batchProgress', index: i, total, label, state: 'failed', error });
+      audio = await client.audioStatus(slug, code);
+    } catch {
+      continue;
     }
-    // Polite, human-like gap before the next chapter (skip after the last).
-    if (i < total - 1) await sleep(politeGap());
+    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', target, voice, autoTag })) {
+      items.push(it);
+    }
   }
-
-  const tail = total - succeeded ? ` (${total - succeeded} failed)` : '';
-  await writeStatus(`✓ Done: ${succeeded}/${total} saved${tail}.`, 'done');
-  return { ok: true, total, succeeded, failed: total - succeeded, results };
+  return enqueue(items).then((r) => ({ ...r, episodes: eps.length }));
 }
+
+// Build queue items from an audio-status missing_files list.
+function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag }) {
+  const out = [];
+  for (const f of missingFiles || []) {
+    const isIntro = /_Introduction\.(mp3|wav)$/i.test(f);
+    const m = f.match(/_Chapter_(\d+)\.(?:mp3|wav)$/i);
+    if (!isIntro && !m) continue;
+    const num = isIntro ? null : parseInt(m[1], 10);
+    const numStr = isIntro ? '' : String(num).padStart(2, '0');
+    out.push(
+      mkItem({
+        kind: isIntro ? 'intro' : 'chapter',
+        slug,
+        episodeCode: code,
+        episodeTitle: title,
+        sectionSlug: isIntro ? 'Introduction' : `Chapter_${numStr}`,
+        chapterNumber: num,
+        target,
+        voice,
+        autoTag,
+        // tokens for Downloads naming:
+        project: title,
+        chapterNum: numStr,
+        chapterLabel: isIntro ? 'Introduction' : `Chapter ${num}`,
+        label: `${code} ${isIntro ? 'Introduction' : 'Ch ' + num}`,
+      })
+    );
+  }
+  return out;
+}
+
+async function fetchItemText(item, client) {
+  if (item.text) return item.text; // paste-mode items carry their own text
+  if (item.kind === 'intro') {
+    const sc = await client.scriptContent(item.slug, item.episodeCode, item.episodeTitle);
+    return sc?.introduction?.content || '';
+  }
+  const res = await client.chapterContent(item.slug, item.episodeCode, item.chapterNumber, item.episodeTitle);
+  return res.content || res.text || '';
+}
+
+async function processQueue() {
+  if (processing) return;
+  processing = true;
+  try {
+    const settings = await getSettings();
+    const client = new StudioClient(settings.studioBaseUrl);
+    let tab = null;
+    for (;;) {
+      let q = await getQueue();
+      const idx = q.findIndex((i) => i.status === 'pending');
+      if (idx < 0) break;
+      q[idx].status = 'running';
+      await setQueue(q);
+      const item = q[idx];
+      const pos = q.filter((i) => i.status === 'done' || i.status === 'failed').length + 1;
+      await writeStatus(`(${pos}/${q.length}) ${item.label}…`, 'running');
+      try {
+        if (!tab) tab = await ensureFishTab();
+        const text = await fetchItemText(item, client);
+        if (!text.trim()) throw new Error('no script text on disk');
+        const job = {
+          text,
+          voice: item.voice,
+          target: item.target,
+          autoTag: item.autoTag,
+          slug: item.slug,
+          episodeCode: item.episodeCode,
+          sectionSlug: item.sectionSlug,
+          chapterNumber: item.chapterNumber,
+          label: item.label,
+        };
+        if (item.target !== 'project') {
+          job.downloadPath = buildDownloadPath(settings, {
+            project: item.project,
+            episodeCode: item.episodeCode,
+            episodeTitle: item.episodeTitle,
+            chapterNum: item.chapterNum,
+            chapterLabel: item.chapterLabel,
+          });
+        }
+        const r = await generateAndSave(job, settings, tab);
+        q = await getQueue();
+        const it = q.find((i) => i.id === item.id);
+        if (it) {
+          it.status = 'done';
+          it.savedAs = r.savedAs;
+        }
+        await setQueue(q);
+      } catch (e) {
+        q = await getQueue();
+        const it = q.find((i) => i.id === item.id);
+        if (it) {
+          it.status = 'failed';
+          it.error = String(e.message || e);
+        }
+        await setQueue(q);
+      }
+      const more = (await getQueue()).some((i) => i.status === 'pending');
+      if (more) await sleep(politeGap());
+    }
+    const q = await getQueue();
+    if (q.length) {
+      const done = q.filter((i) => i.status === 'done').length;
+      const failed = q.filter((i) => i.status === 'failed').length;
+      await writeStatus(`✓ Queue finished: ${done} saved${failed ? `, ${failed} failed` : ''}.`, 'done');
+    }
+    chrome.alarms.clear(ALARM);
+  } finally {
+    processing = false;
+  }
+}
+
+// Drop everything not yet started; let an in-flight item finish on its own.
+async function clearQueue() {
+  const q = (await getQueue()).filter((i) => i.status === 'running');
+  await setQueue(q);
+  await writeStatus('Queue cleared.', 'info');
+  return { ok: true };
+}
+
+// Resume after a worker restart: re-pend any item that was mid-flight when the
+// worker died, then keep going if anything is pending.
+(async () => {
+  const q = await getQueue();
+  let changed = false;
+  for (const i of q)
+    if (i.status === 'running') {
+      i.status = 'pending';
+      changed = true;
+    }
+  if (changed) await setQueue(q);
+  if (q.some((i) => i.status === 'pending')) {
+    chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
+    processQueue();
+  }
+})();
+
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === ALARM) processQueue();
+});
 
 async function listVoices() {
   const tab = await ensureFishTab();
@@ -205,23 +326,24 @@ async function listVoices() {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type === 'runJob') {
-    runJob(msg.job)
-      .then((r) => sendResponse(r))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
-    return true;
+  const reply = (p) => p.then((r) => sendResponse(r)).catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+  switch (msg?.type) {
+    case 'enqueue':
+      reply(enqueue(msg.items));
+      return true;
+    case 'enqueueProject':
+      reply(enqueueProject(msg.payload));
+      return true;
+    case 'clearQueue':
+      reply(clearQueue());
+      return true;
+    case 'getQueue':
+      reply(getQueue().then((queue) => ({ ok: true, queue })));
+      return true;
+    case 'listVoices':
+      reply(listVoices());
+      return true;
+    default:
+      return false;
   }
-  if (msg?.type === 'runBatch') {
-    runBatch(msg.batch)
-      .then((r) => sendResponse(r))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
-    return true;
-  }
-  if (msg?.type === 'listVoices') {
-    listVoices()
-      .then((r) => sendResponse(r))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
-    return true;
-  }
-  return false;
 });
