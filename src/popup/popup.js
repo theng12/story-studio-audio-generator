@@ -101,9 +101,25 @@ async function persist(patch) {
   settings = await saveSettings(patch);
 }
 
-// Show provider-specific UI bits (auto-tag is a fish.audio-only feature).
+// Show provider-specific UI bits (auto-tag is a fish.audio-only feature) and a
+// cost note so the paid provider can't be confused for a free one.
+const PROVIDER_NOTE = {
+  fish: 'Uses your fish.audio web plan (free).',
+  elevenlabs: 'Uses your ElevenLabs quota — free tier gives 10k chars/month. Needs your API key in Settings.',
+  openai: '💲 Paid — OpenAI TTS bills your OpenAI account per use (no free tier).',
+};
 function applyProviderUI() {
-  $('autoTagLabel').hidden = currentProvider() !== 'fish';
+  const p = currentProvider();
+  $('autoTagLabel').hidden = p !== 'fish';
+  $('providerNote').textContent = PROVIDER_NOTE[p] || '';
+}
+
+// How this provider charges — used in the queue confirmation dialogs.
+function costPhrase() {
+  const p = currentProvider();
+  if (p === 'openai') return '💲 bills your paid OpenAI account (per use)';
+  if (p === 'elevenlabs') return 'uses your ElevenLabs quota';
+  return 'uses your fish.audio web plan';
 }
 
 // ── Companion mode ─────────────────────────────────────────────────────────
@@ -318,7 +334,7 @@ async function onGenerateAll() {
   if (!voice) return status('Pick a voice first (↻ to load).');
   const opts = [...$('chapter').options];
   if (!opts.length) return status('Nothing to queue — no missing audio.');
-  if (!confirm(`Queue ${opts.length} section(s) from ${ctx.episodeCode}?\nThis generates audio with ${currentProvider()} and uses your credits.`))
+  if (!confirm(`Queue ${opts.length} section(s) from ${ctx.episodeCode}?\nGenerates with ${currentProvider()} — ${costPhrase()}.`))
     return;
   persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
   const items = opts.map(itemFromOption);
@@ -332,7 +348,7 @@ async function onQueueProject() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   if (!ctx.projectSlug) return;
-  if (!confirm(`Queue ALL missing audio across the whole "${ctx.project}" project?\nThis can be a lot of sections and uses your ${currentProvider()} credits.`))
+  if (!confirm(`Queue ALL missing audio across the whole "${ctx.project}" project?\nThis can be a lot of sections — generates with ${currentProvider()}, ${costPhrase()}.`))
     return;
   persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
   status(`Building a queue for all of ${ctx.project}…`);
