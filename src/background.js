@@ -17,8 +17,30 @@ const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
 
+// Small guards so a missing/disabled API can never break top-level evaluation
+// (which would stop the message listener from registering — symptom: every
+// sendMessage resolves to `undefined`).
+function alarmCreate() {
+  try {
+    chrome.alarms?.create(ALARM, { periodInMinutes: 0.5 });
+  } catch {
+    /* alarms unavailable — queue still runs while the worker is alive */
+  }
+}
+function alarmClear() {
+  try {
+    chrome.alarms?.clear(ALARM);
+  } catch {
+    /* ignore */
+  }
+}
+
 // Clicking the toolbar icon opens the persistent side panel (not a popup).
-chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+try {
+  chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+} catch {
+  /* sidePanel unavailable on older Chrome */
+}
 
 // On install/update, reload open fish.audio tabs so their content scripts
 // aren't stale (they keep old code until the page reloads).
@@ -146,7 +168,7 @@ async function enqueue(items) {
   if (!q.some((i) => i.status === 'pending' || i.status === 'running')) q = [];
   for (const it of items) q.push({ ...it, id: it.id || `${Date.now()}_${_seq++}`, status: 'pending' });
   await setQueue(q);
-  chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
+  alarmCreate();
   processQueue();
   return { ok: true, added: items.length };
 }
@@ -284,7 +306,7 @@ async function processQueue() {
       const failed = q.filter((i) => i.status === 'failed').length;
       await writeStatus(`✓ Queue finished: ${done} saved${failed ? `, ${failed} failed` : ''}.`, 'done');
     }
-    chrome.alarms.clear(ALARM);
+    alarmClear();
   } finally {
     processing = false;
   }
@@ -310,12 +332,12 @@ async function clearQueue() {
     }
   if (changed) await setQueue(q);
   if (q.some((i) => i.status === 'pending')) {
-    chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
+    alarmCreate();
     processQueue();
   }
 })();
 
-chrome.alarms.onAlarm.addListener((a) => {
+chrome.alarms?.onAlarm?.addListener((a) => {
   if (a.name === ALARM) processQueue();
 });
 

@@ -286,7 +286,7 @@ async function onGenerateAll() {
   persist({ saveTarget: $('saveTarget').value, fishVoice: voice });
   const items = opts.map(itemFromOption);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
-  status(r?.ok ? `Queued ${items.length} section(s) from ${ctx.episodeCode}.` : `Queue failed: ${r?.error}`);
+  status(r?.ok ? `Queued ${items.length} section(s) from ${ctx.episodeCode}.` : `Queue failed: ${r?.error || 'no response from the background — reload the extension at chrome://extensions'}`);
 }
 
 // Queue every missing section of EVERY eligible episode in the project. The
@@ -309,7 +309,7 @@ async function onQueueProject() {
   status(
     r?.ok
       ? `Queued ${r.added} section(s) across ${r.episodes} episode(s).`
-      : `Queue failed: ${r?.error}`
+      : `Queue failed: ${r?.error || 'no response from the background — reload the extension at chrome://extensions'}`
   );
 }
 
@@ -432,5 +432,5 @@ async function onGenerate() {
   }
 
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
-  status(r?.ok ? `Queued ${item.label}.` : `Queue failed: ${r?.error}`);
+  status(r?.ok ? `Queued ${item.label}.` : `Queue failed: ${r?.error || 'no response from the background — reload the extension at chrome://extensions'}`);
 }
