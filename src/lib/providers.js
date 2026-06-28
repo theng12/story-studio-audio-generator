@@ -28,8 +28,8 @@ export const PROVIDERS = {
     origin: 'https://elevenlabs.io/*',
     appUrl: 'https://elevenlabs.io/app/speech-synthesis/text-to-speech',
     // Drives the logged-in elevenlabs.io session (Firebase Bearer token) — no
-    // API key. Per-generation char cap varies by tier; 2400 is free-tier safe.
-    maxChars: 2400,
+    // API key. ElevenLabs web per-generation cap is 5000 chars.
+    maxChars: 5000,
   },
   elevenlabs: {
     id: 'elevenlabs',

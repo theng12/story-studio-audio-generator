@@ -16,7 +16,7 @@ Pick the provider in the side panel. Two kinds:
     `securetoken` endpoint, so it never goes stale), then calls
     `api.us.elevenlabs.io/v1/text-to-speech/{voice}` — no captcha. Uses the same
     free 10k-chars/month quota as the website. Long text is chunked (per-gen cap
-    is ~free-tier-safe 2400) and the MP3s joined. Keep an elevenlabs.io tab open.
+    is 5000 chars) and the MP3s joined. Keep an elevenlabs.io tab open.
 - **API-key — ElevenLabs (API key), OpenAI.** The service worker calls the
   official API directly with a key you paste in **Settings** (stored locally,
   never synced). No browser tab needed.

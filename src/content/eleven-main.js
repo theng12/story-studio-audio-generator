@@ -16,7 +16,7 @@
 (() => {
   const API = 'https://api.us.elevenlabs.io/v1';
   const MODEL = 'eleven_multilingual_v2';
-  const MAX_CHARS = 2400; // free-tier-safe per-generation cap; long text is chunked
+  const MAX_CHARS = 5000; // ElevenLabs web per-generation cap; longer text is chunked
   const REQ = 'ELEVENEXT_REQ';
   const RES = 'ELEVENEXT_RES';
 
