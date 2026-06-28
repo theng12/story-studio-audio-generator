@@ -8,16 +8,23 @@ with the correct name, into the right project folder.
 
 Pick the provider in the side panel. Two kinds:
 
-- **Web-session — fish.audio.** Driven through your logged-in fish.audio tab
-  (uses your web plan; no API key). See the fish-specific details below.
-- **API-key — ElevenLabs, OpenAI.** The service worker calls the official API
-  directly with a key you paste in **Settings** (stored locally, never synced).
-  No browser tab needed.
-  - **ElevenLabs** draws from your subscription's character quota (same as the
-    web app). Voices are pulled from your account.
-  - **OpenAI TTS** has fixed voices (alloy, nova, …) and a 4096-char request
-    cap, so long chapters are split into sentence-boundary chunks and the MP3s
-    are joined automatically.
+- **Web-session — fish.audio, ElevenLabs (web).** Driven through your
+  logged-in tab on that site (uses your plan/free quota; **no API key**).
+  - **fish.audio** — see the fish-specific details below.
+  - **ElevenLabs (web)** — drives your logged-in elevenlabs.io session. It reads
+    the page's Firebase session token (and refreshes it itself via Firebase's
+    `securetoken` endpoint, so it never goes stale), then calls
+    `api.us.elevenlabs.io/v1/text-to-speech/{voice}` — no captcha. Uses the same
+    free 10k-chars/month quota as the website. Long text is chunked (per-gen cap
+    is ~free-tier-safe 2400) and the MP3s joined. Keep an elevenlabs.io tab open.
+- **API-key — ElevenLabs (API key), OpenAI.** The service worker calls the
+  official API directly with a key you paste in **Settings** (stored locally,
+  never synced). No browser tab needed.
+  - **ElevenLabs (API key)** draws from the same subscription quota; voices come
+    from your account. Use this if you'd rather not keep an elevenlabs.io tab open.
+  - **OpenAI TTS** has fixed voices (alloy, nova, …), is **paid per use**, and a
+    4096-char request cap, so long chapters are split into sentence-boundary
+    chunks and the MP3s joined automatically.
 
 Auto-tag (emotion/pause tags) is a fish.audio-only feature and only shows for
 that provider. Everything else — the queue, save-back, naming — is shared

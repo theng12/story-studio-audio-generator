@@ -14,10 +14,22 @@ export const PROVIDERS = {
     id: 'fish',
     name: 'fish.audio',
     type: 'webSession',
+    msg: 'fish', // content-script message namespace
     origin: 'https://fish.audio/*',
     appUrl: 'https://fish.audio/text-to-speech/',
     autoTag: true, // has the /enhance/text emotion-tagging endpoint
     maxChars: 15000,
+  },
+  elevenlabs_web: {
+    id: 'elevenlabs_web',
+    name: 'ElevenLabs (web)',
+    type: 'webSession',
+    msg: 'eleven',
+    origin: 'https://elevenlabs.io/*',
+    appUrl: 'https://elevenlabs.io/app/speech-synthesis/text-to-speech',
+    // Drives the logged-in elevenlabs.io session (Firebase Bearer token) — no
+    // API key. Per-generation char cap varies by tier; 2400 is free-tier safe.
+    maxChars: 2400,
   },
   elevenlabs: {
     id: 'elevenlabs',

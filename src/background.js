@@ -14,7 +14,6 @@ import { StudioClient } from './lib/story-studio.js';
 import { buildDownloadPath } from './lib/naming.js';
 import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate } from './lib/providers.js';
 
-const FISH_APP_URL = 'https://fish.audio/text-to-speech/';
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
 
@@ -43,23 +42,27 @@ try {
   /* sidePanel unavailable on older Chrome */
 }
 
-// On install/update, reload open fish.audio tabs so their content scripts
-// aren't stale (they keep old code until the page reloads).
+// On install/update, reload open web-session provider tabs so their content
+// scripts aren't stale (they keep old code until the page reloads).
 chrome.runtime.onInstalled.addListener(async () => {
   try {
-    const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
-    for (const t of tabs) chrome.tabs.reload(t.id);
+    for (const p of Object.values(PROVIDERS)) {
+      if (p.type !== 'webSession') continue;
+      const tabs = await chrome.tabs.query({ url: p.origin });
+      for (const t of tabs) chrome.tabs.reload(t.id);
+    }
   } catch {
     /* best-effort */
   }
 });
 
-// ── fish.audio tab plumbing ─────────────────────────────────────────────────
-async function ensureFishTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://fish.audio/*' });
+// ── web-session provider tab plumbing ───────────────────────────────────────
+// Find a ready tab on the provider's site, or open its app page and wait.
+async function ensureProviderTab(p) {
+  const tabs = await chrome.tabs.query({ url: p.origin });
   const ready = tabs.find((t) => t.status === 'complete');
   if (ready) return ready;
-  const tab = tabs[0] || (await chrome.tabs.create({ url: FISH_APP_URL, active: false }));
+  const tab = tabs[0] || (await chrome.tabs.create({ url: p.appUrl, active: false }));
   await new Promise((resolve) => {
     const listener = (tabId, info) => {
       if (tabId === tab.id && info.status === 'complete') {
@@ -74,7 +77,7 @@ async function ensureFishTab() {
 
 async function send(tabId, message) {
   const res = await chrome.tabs.sendMessage(tabId, message);
-  if (!res || !res.ok) throw new Error(res?.error || 'No response from fish.audio.');
+  if (!res || !res.ok) throw new Error(res?.error || 'No response from the provider page.');
   return res;
 }
 
@@ -88,11 +91,11 @@ async function produceAudio(job, settings) {
   if (!job.text || !job.text.trim()) throw new Error('No script text to generate.');
 
   if (p.type === 'webSession') {
-    const voice = job.voice || settings.voiceByProvider?.[providerId] || settings.fishVoice;
+    const voice = job.voice || settings.voiceByProvider?.[providerId] || (providerId === 'fish' ? settings.fishVoice : '');
     if (!voice) throw new Error(`No ${p.name} voice selected. Pick one in the panel.`);
-    const tab = await ensureFishTab();
+    const tab = await ensureProviderTab(p);
     return send(tab.id, {
-      type: 'fish:generate',
+      type: `${p.msg}:generate`,
       text: job.text,
       voice,
       speed: job.speed ?? 1,
@@ -391,8 +394,8 @@ chrome.alarms?.onAlarm?.addListener((a) => {
 async function listVoices(providerId) {
   const p = PROVIDERS[providerId] || PROVIDERS.fish;
   if (p.type === 'webSession') {
-    const tab = await ensureFishTab();
-    const { voices } = await send(tab.id, { type: 'fish:listVoices' });
+    const tab = await ensureProviderTab(p);
+    const { voices } = await send(tab.id, { type: `${p.msg}:listVoices` });
     return { ok: true, voices };
   }
   const keys = await getApiKeys();

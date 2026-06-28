@@ -104,7 +104,8 @@ async function persist(patch) {
 // Show provider-specific UI bits (auto-tag is a fish.audio-only feature) and a
 // cost note so the paid provider can't be confused for a free one.
 const PROVIDER_NOTE = {
-  fish: 'Uses your fish.audio web plan (free).',
+  fish: 'Uses your fish.audio web plan (free). Keep a logged-in fish.audio tab.',
+  elevenlabs_web: 'Drives your logged-in elevenlabs.io session — no key. Free tier = 10k chars/month. Keep an elevenlabs.io tab open.',
   elevenlabs: 'Uses your ElevenLabs quota — free tier gives 10k chars/month. Needs your API key in Settings.',
   openai: '💲 Paid — OpenAI TTS bills your OpenAI account per use (no free tier).',
 };
@@ -118,7 +119,7 @@ function applyProviderUI() {
 function costPhrase() {
   const p = currentProvider();
   if (p === 'openai') return '💲 bills your paid OpenAI account (per use)';
-  if (p === 'elevenlabs') return 'uses your ElevenLabs quota';
+  if (p === 'elevenlabs' || p === 'elevenlabs_web') return 'uses your ElevenLabs quota';
   return 'uses your fish.audio web plan';
 }
 
