@@ -136,7 +136,10 @@ async function initCompanion() {
     await loadCompanionData();
   } catch (e) {
     if (e.status !== 401) {
-      status(`Can't reach Story Studio at ${settings.studioBaseUrl}. Is it running?`);
+      const url = settings.studioBaseUrl || '';
+      const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url);
+      const hint = local ? 'is it running?' : 'is it running, did you Grant access + log in (Settings)?';
+      status(`Can't reach Story Studio at ${url} — ${hint} (${e.message})`);
       return;
     }
     // A real 401 means a remote server that needs a login. Use the credentials

@@ -11,9 +11,10 @@
 
 export const DEFAULTS = {
   mode: 'paste', // "companion" | "paste" — user picks on first run
-  // Story Studio server. Server-mode default port is 8766 (auth-gated);
-  // the plain desktop app serves the same API on 8000 (no auth).
-  studioBaseUrl: 'http://localhost:8766',
+  // Story Studio server. Default port 8677, but fully editable — set this to a
+  // localhost URL (any port; loopback bypasses auth) or a remote/Tailscale URL
+  // like http://mac-mini.tailXXXX.ts.net:8677 (needs Grant access + login).
+  studioBaseUrl: 'http://localhost:8677',
   // Server mode requires a login -> session cookie. Desktop mode does not.
   studioUsername: '',
   // NOTE: we never store the password; the user logs in through the popup

@@ -18,11 +18,17 @@
 
     <div id="companionOpts">
       <label>Story Studio server URL
-        <input id="studioBaseUrl" placeholder="http://localhost:8766" />
+        <input id="studioBaseUrl" placeholder="http://localhost:8677" />
       </label>
-      <p class="muted">Over <code>localhost</code> no login is needed (the server
-        trusts local requests). Only a remote / tailnet address needs the login
-        below.</p>
+      <p class="muted">Local studio (<code>localhost</code>) needs no login or
+        access grant. A remote / Tailscale server (e.g.
+        <code>http://mac-mini.tailXXXX.ts.net:8677</code>) needs both.</p>
+      <div class="row">
+        <button id="grantAccess">Grant access to this server</button>
+        <button id="testConnection">Test connection</button>
+      </div>
+      <p id="grantStatus" class="muted"></p>
+      <p id="testStatus" class="muted"></p>
 
       <label>Username <span class="muted">(only for remote servers)</span>
         <input id="studioUsername" autocomplete="off" placeholder="leave blank for localhost" />
