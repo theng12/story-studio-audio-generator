@@ -15,6 +15,10 @@
   reports the project count (or a clear error + grant/login hint).
 - **Panel hint** now distinguishes local vs remote when it can't reach the
   server ("did you Grant access + log in?").
+- **Regeneration toggles** (borrowed from the sibling Flow extension): "Show
+  episodes that already have all audio" and "Include chapters that already have
+  audio (re-voice)" — so you can re-generate a chapter after editing its script
+  or switching voice/provider. Already-voiced chapters are marked ✓.
 
 Recap of how it works: localhost (loopback) needs no grant and no login; a
 remote server needs the grant + server-mode login (`POST /api/auth/login`).

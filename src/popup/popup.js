@@ -20,8 +20,10 @@ let client; // StudioClient (companion mode)
 let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
 let episodesByProject = {}; // slug -> [episode objects with .status]
 
-// An episode is worth showing when its script is done but audio isn't.
-const isEligible = (ep) => !!(ep.status && ep.status.script && !ep.status.audio);
+// An episode is worth showing when its script is done and (audio is missing, or
+// the user asked to also see already-done episodes for re-voicing).
+const isEligible = (ep) =>
+  !!(ep.status && ep.status.script && (settings?.showDoneEpisodes || !ep.status.audio));
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -86,6 +88,20 @@ async function init() {
     $('queueProject').hidden = false;
     $('generateAll').addEventListener('click', onGenerateAll);
     $('queueProject').addEventListener('click', onQueueProject);
+    // Regeneration toggles.
+    $('showDoneEpisodes').checked = !!settings.showDoneEpisodes;
+    $('includeExisting').checked = !!settings.includeExisting;
+    updateCompanionHints();
+    $('showDoneEpisodes').addEventListener('change', async () => {
+      await persist({ showDoneEpisodes: $('showDoneEpisodes').checked });
+      updateCompanionHints();
+      await loadEpisodes();
+    });
+    $('includeExisting').addEventListener('change', async () => {
+      await persist({ includeExisting: $('includeExisting').checked });
+      updateCompanionHints();
+      await loadSections();
+    });
     await initCompanion();
   } else {
     $('pastePane').hidden = false;
@@ -99,6 +115,13 @@ async function init() {
 // Persist a settings patch and keep our local copy in sync.
 async function persist(patch) {
   settings = await saveSettings(patch);
+}
+
+function updateCompanionHints() {
+  const eh = $('episodeHint');
+  const ch = $('chapterHint');
+  if (eh) eh.textContent = settings.showDoneEpisodes ? '(all episodes with a script)' : '(script done, audio missing)';
+  if (ch) ch.textContent = settings.includeExisting ? '(✓ = already has audio)' : '(missing audio only)';
 }
 
 // Show provider-specific UI bits (auto-tag is a fish.audio-only feature) and a
@@ -245,58 +268,73 @@ async function loadEpisodes() {
   }
 }
 
-// Build the chapter/intro dropdown from the episode's MISSING audio files.
+// Build the chapter/intro dropdown. Missing-audio sections come from
+// audio-status (authoritative); when "include existing" is on, already-voiced
+// sections are added too (from chapter-list) so they can be re-generated.
 async function loadSections() {
   const slug = ctx.projectSlug;
   const epOpt = $('episode').selectedOptions[0];
   ctx.episodeCode = epOpt?.value || '';
   ctx.episodeTitle = epOpt?.dataset.title || '';
+  const hasIntro = epOpt?.dataset.hasIntro === '1';
   const sel = $('chapter');
   sel.innerHTML = '';
-  status('Finding missing audio…');
+  status('Loading chapters…');
   try {
     const [audio, chapterRows] = await Promise.all([
       client.audioStatus(slug, ctx.episodeCode),
       client.chapterList(slug, ctx.episodeCode, ctx.episodeTitle).catch(() => ({ chapters: [] })),
     ]);
-    const titles = {};
-    for (const c of chapterRows.chapters || chapterRows || []) {
-      titles[c.number ?? c.chapterNumber] = c.title || c.label;
-    }
-    const sections = [];
+
+    // Which sections are MISSING audio (slug set).
+    const missing = new Set();
     for (const f of audio.missing_files || []) {
-      if (/_Introduction\.(mp3|wav)$/i.test(f)) {
-        sections.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
-      } else {
+      if (/_Introduction\.(mp3|wav)$/i.test(f)) missing.add('Introduction');
+      else {
         const m = f.match(/_Chapter_(\d+)\.(?:mp3|wav)$/i);
-        if (m) {
-          const num = parseInt(m[1], 10);
-          sections.push({
-            slug: `Chapter_${pad(num)}`,
-            kind: 'chapter',
-            num,
-            label: `${pad(num)} ${titles[num] || `Chapter ${num}`}`,
-          });
-        }
+        if (m) missing.add(`Chapter_${pad(parseInt(m[1], 10))}`);
       }
     }
-    // Intro first, then chapters in order.
-    sections.sort((a, b) =>
-      a.kind === b.kind ? (a.num || 0) - (b.num || 0) : a.kind === 'intro' ? -1 : 1
-    );
-    for (const s of sections) {
+
+    // Titles + the full set of generatable chapter numbers (script on disk),
+    // unioned with any missing chapter numbers (so they show even if chapter-list
+    // came back empty).
+    const titles = {};
+    const chapNums = new Set();
+    for (const c of chapterRows.chapters || chapterRows || []) {
+      const n = c.number ?? c.chapterNumber;
+      if (n == null || c.present === false) continue;
+      titles[n] = c.title || c.label;
+      chapNums.add(n);
+    }
+    for (const s of missing) {
+      const m = s.match(/^Chapter_(\d+)$/);
+      if (m) chapNums.add(parseInt(m[1], 10));
+    }
+
+    // Candidate sections (intro first, then chapters in order).
+    const cand = [];
+    if (hasIntro) cand.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
+    for (const num of [...chapNums].sort((a, b) => a - b)) {
+      cand.push({ slug: `Chapter_${pad(num)}`, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}` });
+    }
+    for (const s of cand) s.present = !missing.has(s.slug);
+
+    const visible = settings.includeExisting ? cand : cand.filter((s) => !s.present);
+    for (const s of visible) {
       const opt = document.createElement('option');
       opt.value = s.slug;
       opt.dataset.kind = s.kind;
       opt.dataset.num = s.num ?? '';
       opt.dataset.label = s.label;
-      opt.textContent = s.label;
+      opt.textContent = s.present ? `${s.label} ✓` : s.label; // ✓ = already has audio
       sel.appendChild(opt);
     }
     sel.onchange = updatePreview;
-    status(sections.length ? '' : 'This episode already has all its audio.');
+    if (visible.length) status('');
+    else status(settings.includeExisting ? 'No chapters with a script found.' : 'This episode already has all its audio. 🎉');
   } catch (e) {
-    status(`Could not load sections: ${e.message || e}`);
+    status(`Could not load chapters: ${e.message || e}`);
   }
   updatePreview();
 }

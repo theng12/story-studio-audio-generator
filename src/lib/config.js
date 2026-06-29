@@ -40,6 +40,12 @@ export const DEFAULTS = {
   // Auto-tag the script with Fish's emotion/pause tags before generating
   // (POST /enhance/text). Off by default.
   autoTag: false,
+  // Regeneration toggles (companion mode), borrowed from the sibling Flow ext:
+  //   showDoneEpisodes — also list episodes whose audio is already complete.
+  //   includeExisting  — also list chapters/intro that already have audio,
+  //                      so you can re-voice them (edited script, new voice…).
+  showDoneEpisodes: false,
+  includeExisting: false,
   // Last-used selections, restored when the popup reopens.
   lastProject: '',
   lastEpisode: '',

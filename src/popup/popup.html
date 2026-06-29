@@ -27,11 +27,19 @@
       <label>Project
         <select id="project"></select>
       </label>
-      <label>Episode <span class="muted">(script done, audio missing)</span>
+      <label>Episode <span class="muted" id="episodeHint">(script done, audio missing)</span>
         <select id="episode"></select>
       </label>
-      <label>Chapter / Intro <span class="muted">(missing audio only)</span>
+      <label>Chapter / Intro <span class="muted" id="chapterHint">(missing audio only)</span>
         <select id="chapter"></select>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="showDoneEpisodes" />
+        Show episodes that already have all audio
+      </label>
+      <label class="check">
+        <input type="checkbox" id="includeExisting" />
+        Include chapters that already have audio (re-voice)
       </label>
     </section>
 
