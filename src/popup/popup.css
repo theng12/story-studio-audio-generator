@@ -92,3 +92,45 @@ label.check input { width: auto; margin: 0; }
 .muted { color: var(--muted); font-size: 11px; }
 #filenamePreview { word-break: break-all; }
 #status { min-height: 16px; }
+
+/* hidden attribute always wins (so the overlay's display:flex can't override it) */
+[hidden] { display: none !important; }
+
+.row.between { justify-content: space-between; }
+.row.end { justify-content: flex-end; margin-top: 12px; }
+.section-head { margin-top: 10px; }
+#testConn { font-size: 12px; color: #2563eb; }
+#queueSelected { margin-top: 12px; }
+
+/* Multi-select section list */
+.sectionlist {
+  margin-top: 4px;
+  max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.sec {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; font-size: 12px;
+  border-bottom: 1px solid #f1f1f1;
+}
+.sec:last-child { border-bottom: none; }
+.sec input { width: auto; margin: 0; flex: none; }
+.sec .seclabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sec.done .seclabel { color: #999; }
+.badge { font-size: 10px; color: #0a7a0a; border: 1px solid #cdebcd; background: #f2fbf2; border-radius: 999px; padding: 1px 6px; }
+.sectionlist .empty { padding: 8px; color: var(--muted); }
+
+/* Styled confirm overlay */
+.overlay {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.dialog {
+  background: #fff; border-radius: 12px; padding: 14px; width: 100%; max-width: 320px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+.dlgtitle { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.dialog .muted { font-size: 12px; }
+.dialog .primary { width: auto; margin: 0; padding: 7px 14px; }
+.dialog button { padding: 7px 12px; }

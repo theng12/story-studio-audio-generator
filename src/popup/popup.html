@@ -24,14 +24,15 @@
 
     <!-- Companion mode: pick from a running Story Studio server -->
     <section id="companionPane" hidden>
+      <div class="row between">
+        <button id="testConn" class="link">Test connection</button>
+        <span id="connStatus" class="muted"></span>
+      </div>
       <label>Project
         <select id="project"></select>
       </label>
       <label>Episode <span class="muted" id="episodeHint">(script done, audio missing)</span>
         <select id="episode"></select>
-      </label>
-      <label>Chapter / Intro <span class="muted" id="chapterHint">(missing audio only)</span>
-        <select id="chapter"></select>
       </label>
       <label class="check">
         <input type="checkbox" id="showDoneEpisodes" />
@@ -41,6 +42,12 @@
         <input type="checkbox" id="includeExisting" />
         Include chapters that already have audio (re-voice)
       </label>
+
+      <div class="row between section-head">
+        <span class="muted" id="sectionsSummary">Chapters / Intro</span>
+        <label class="check"><input type="checkbox" id="selectAll" /> all</label>
+      </div>
+      <div id="sectionList" class="sectionlist"></div>
     </section>
 
     <!-- Paste mode: free text -->
@@ -80,7 +87,7 @@
     </div>
 
     <button id="generate" class="primary">Generate &amp; save</button>
-    <button id="generateAll" hidden>Queue all chapters (this episode)</button>
+    <button id="queueSelected" class="primary" hidden>Queue selected</button>
     <button id="queueProject" hidden>Queue whole project</button>
 
     <div id="queueBar" class="queuebar" hidden>
@@ -90,6 +97,18 @@
     <ul id="queueList" class="queuelist" hidden></ul>
 
     <p id="status" class="muted"></p>
+
+    <!-- Styled confirmation (replaces the native confirm popup) -->
+    <div id="confirm" class="overlay" hidden>
+      <div class="dialog">
+        <div class="dlgtitle" id="confirmTitle"></div>
+        <div class="muted" id="confirmBody"></div>
+        <div class="row end">
+          <button id="confirmCancel">Cancel</button>
+          <button id="confirmOk" class="primary">Queue</button>
+        </div>
+      </div>
+    </div>
 
     <script type="module" src="popup.js"></script>
   </body>

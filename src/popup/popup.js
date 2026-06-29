@@ -19,6 +19,7 @@ let settings;
 let client; // StudioClient (companion mode)
 let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
 let episodesByProject = {}; // slug -> [episode objects with .status]
+let currentSections = []; // [{ slug, kind, num, label, present }] for the section list
 
 // An episode is worth showing when its script is done and (audio is missing, or
 // the user asked to also see already-done episodes for re-voicing).
@@ -84,10 +85,20 @@ async function init() {
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
-    $('generateAll').hidden = false;
+    $('generate').hidden = true; // companion uses the multi-select "Queue selected"
+    $('queueSelected').hidden = false;
     $('queueProject').hidden = false;
-    $('generateAll').addEventListener('click', onGenerateAll);
+    $('queueSelected').addEventListener('click', onQueueSelected);
     $('queueProject').addEventListener('click', onQueueProject);
+    $('testConn').addEventListener('click', testConnection);
+    $('selectAll').addEventListener('change', (e) => {
+      $('sectionList')
+        .querySelectorAll('input[type=checkbox]')
+        .forEach((c) => {
+          if (!c.disabled) c.checked = e.target.checked;
+        });
+      updateSelectionSummary();
+    });
     // Regeneration toggles.
     $('showDoneEpisodes').checked = !!settings.showDoneEpisodes;
     $('includeExisting').checked = !!settings.includeExisting;
@@ -100,11 +111,13 @@ async function init() {
     $('includeExisting').addEventListener('change', async () => {
       await persist({ includeExisting: $('includeExisting').checked });
       updateCompanionHints();
-      await loadSections();
+      renderSections(); // re-render (enables/disables already-voiced rows) — no refetch
     });
     await initCompanion();
   } else {
     $('pastePane').hidden = false;
+    $('queueSelected').hidden = true;
+    $('queueProject').hidden = true;
     ['pasteCode', 'pasteLabel', 'pasteText'].forEach((id) =>
       $(id).addEventListener('input', updatePreview)
     );
@@ -119,9 +132,7 @@ async function persist(patch) {
 
 function updateCompanionHints() {
   const eh = $('episodeHint');
-  const ch = $('chapterHint');
   if (eh) eh.textContent = settings.showDoneEpisodes ? '(all episodes with a script)' : '(script done, audio missing)';
-  if (ch) ch.textContent = settings.includeExisting ? '(✓ = already has audio)' : '(missing audio only)';
 }
 
 // Show provider-specific UI bits (auto-tag is a fish.audio-only feature) and a
@@ -262,23 +273,22 @@ async function loadEpisodes() {
     status('');
     await loadSections();
   } else {
-    $('chapter').innerHTML = '';
-    updatePreview();
+    currentSections = [];
+    renderSections();
     status('No episodes in this project need audio. 🎉');
   }
 }
 
-// Build the chapter/intro dropdown. Missing-audio sections come from
-// audio-status (authoritative); when "include existing" is on, already-voiced
-// sections are added too (from chapter-list) so they can be re-generated.
+// Load the episode's sections into the multi-select list. Missing-audio
+// sections come from audio-status (authoritative); chapter titles + the full
+// list come from chapter-list. Already-voiced sections are shown with a badge
+// (selectable only in "include existing / re-voice" mode).
 async function loadSections() {
   const slug = ctx.projectSlug;
   const epOpt = $('episode').selectedOptions[0];
   ctx.episodeCode = epOpt?.value || '';
   ctx.episodeTitle = epOpt?.dataset.title || '';
   const hasIntro = epOpt?.dataset.hasIntro === '1';
-  const sel = $('chapter');
-  sel.innerHTML = '';
   status('Loading chapters…');
   try {
     const [audio, chapterRows] = await Promise.all([
@@ -286,7 +296,6 @@ async function loadSections() {
       client.chapterList(slug, ctx.episodeCode, ctx.episodeTitle).catch(() => ({ chapters: [] })),
     ]);
 
-    // Which sections are MISSING audio (slug set).
     const missing = new Set();
     for (const f of audio.missing_files || []) {
       if (/_Introduction\.(mp3|wav)$/i.test(f)) missing.add('Introduction');
@@ -296,9 +305,6 @@ async function loadSections() {
       }
     }
 
-    // Titles + the full set of generatable chapter numbers (script on disk),
-    // unioned with any missing chapter numbers (so they show even if chapter-list
-    // came back empty).
     const titles = {};
     const chapNums = new Set();
     for (const c of chapterRows.chapters || chapterRows || []) {
@@ -312,74 +318,118 @@ async function loadSections() {
       if (m) chapNums.add(parseInt(m[1], 10));
     }
 
-    // Candidate sections (intro first, then chapters in order).
     const cand = [];
     if (hasIntro) cand.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
     for (const num of [...chapNums].sort((a, b) => a - b)) {
       cand.push({ slug: `Chapter_${pad(num)}`, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}` });
     }
     for (const s of cand) s.present = !missing.has(s.slug);
-
-    const visible = settings.includeExisting ? cand : cand.filter((s) => !s.present);
-    for (const s of visible) {
-      const opt = document.createElement('option');
-      opt.value = s.slug;
-      opt.dataset.kind = s.kind;
-      opt.dataset.num = s.num ?? '';
-      opt.dataset.label = s.label;
-      opt.textContent = s.present ? `${s.label} ✓` : s.label; // ✓ = already has audio
-      sel.appendChild(opt);
-    }
-    sel.onchange = updatePreview;
-    if (visible.length) status('');
-    else status(settings.includeExisting ? 'No chapters with a script found.' : 'This episode already has all its audio. 🎉');
+    currentSections = cand;
+    renderSections();
+    status('');
   } catch (e) {
+    currentSections = [];
+    renderSections();
     status(`Could not load chapters: ${e.message || e}`);
   }
-  updatePreview();
+}
+
+// Render the section checkboxes. Missing-audio rows are pre-checked; already
+// voiced rows show a ✓ badge and are only selectable when re-voice is on.
+function renderSections() {
+  const wrap = $('sectionList');
+  wrap.innerHTML = '';
+  if (!currentSections.length) {
+    wrap.innerHTML = '<div class="empty">No chapters with a script found.</div>';
+    updateSelectionSummary();
+    return;
+  }
+  const includeExisting = !!settings.includeExisting;
+  for (const s of currentSections) {
+    const row = document.createElement('div');
+    row.className = 'sec' + (s.present ? ' done' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.slug = s.slug;
+    cb.checked = !s.present;
+    cb.disabled = s.present && !includeExisting;
+    cb.onchange = updateSelectionSummary;
+    const lab = document.createElement('span');
+    lab.className = 'seclabel';
+    lab.textContent = s.label;
+    row.append(cb, lab);
+    if (s.present) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = '✓ audio';
+      row.appendChild(b);
+    }
+    wrap.appendChild(row);
+  }
+  updateSelectionSummary();
+}
+
+function selectedSections() {
+  const slugs = new Set(
+    [...$('sectionList').querySelectorAll('input[type=checkbox]')]
+      .filter((c) => c.checked && !c.disabled)
+      .map((c) => c.dataset.slug)
+  );
+  return currentSections.filter((s) => slugs.has(s.slug));
+}
+
+function updateSelectionSummary() {
+  const done = currentSections.filter((s) => s.present).length;
+  $('sectionsSummary').textContent = currentSections.length
+    ? `Chapters / Intro — ${done}/${currentSections.length} have audio`
+    : 'Chapters / Intro';
+  const n = selectedSections().length;
+  const btn = $('queueSelected');
+  btn.disabled = n === 0;
+  btn.textContent = n ? `Queue selected (${n})` : 'Queue selected';
 }
 
 // ── Queue ───────────────────────────────────────────────────────────────────
 //
 // All generation goes through the worker's persistent queue (one item at a
 // time, human-paced, survives the panel closing). The panel just builds items
-// — identifiers only; the worker fetches each section's text from Story Studio
-// when it gets to it.
-
-// Build a queue item from a companion section <option>.
-function itemFromOption(opt) {
+// — identifiers only; the worker fetches each section's text when it gets to it.
+function itemFromSection(s) {
   return {
-    kind: opt.dataset.kind, // 'intro' | 'chapter'
+    kind: s.kind,
     slug: ctx.projectSlug,
     episodeCode: ctx.episodeCode,
     episodeTitle: ctx.episodeTitle,
-    sectionSlug: opt.value,
-    chapterNumber: opt.dataset.num || null,
+    sectionSlug: s.slug,
+    chapterNumber: s.num ?? null,
     target: $('saveTarget').value,
     provider: currentProvider(),
     voice: $('voice').value,
     autoTag: $('autoTag').checked,
     project: ctx.project || '',
-    chapterNum: opt.dataset.num || '',
-    chapterLabel: opt.dataset.label || '',
-    label: `${ctx.episodeCode} ${opt.dataset.label || opt.value}`,
+    chapterNum: s.num != null ? pad(s.num) : '',
+    chapterLabel: s.label,
+    label: `${ctx.episodeCode} ${s.label}`,
   };
 }
 
 const NORESP = 'no response from the background — reload the extension at chrome://extensions';
 const skipNote = (r) => (r.skipped ? ` (skipped ${r.skipped} already queued)` : '');
 
-// Queue every missing section of the CURRENT episode. Confirms first so a
-// stray double-click can't silently spend credits.
-async function onGenerateAll() {
+// Queue the ticked sections (confirmed first).
+async function onQueueSelected() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
-  const opts = [...$('chapter').options];
-  if (!opts.length) return status('Nothing to queue — no missing audio.');
-  if (!confirm(`Queue ${opts.length} section(s) from ${ctx.episodeCode}?\nGenerates with ${currentProvider()} — ${costPhrase()}.`))
-    return;
+  const sel = selectedSections();
+  if (!sel.length) return status('Tick at least one chapter.');
+  const ok = await confirmDialog(
+    `Queue ${sel.length} chapter${sel.length > 1 ? 's' : ''} from ${ctx.episodeCode}?`,
+    `Generates with ${currentProvider()} — ${costPhrase()}.`,
+    'Queue'
+  );
+  if (!ok) return;
   persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
-  const items = opts.map(itemFromOption);
+  const items = sel.map(itemFromSection);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
   status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
 }
@@ -390,8 +440,12 @@ async function onQueueProject() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   if (!ctx.projectSlug) return;
-  if (!confirm(`Queue ALL missing audio across the whole "${ctx.project}" project?\nThis can be a lot of sections — generates with ${currentProvider()}, ${costPhrase()}.`))
-    return;
+  const ok = await confirmDialog(
+    `Queue ALL missing audio across "${ctx.project}"?`,
+    `This can be a lot of chapters — generates with ${currentProvider()}, ${costPhrase()}.`,
+    'Queue all'
+  );
+  if (!ok) return;
   persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
   status(`Building a queue for all of ${ctx.project}…`);
   const r = await chrome.runtime.sendMessage({
@@ -512,68 +566,102 @@ async function loadVoices() {
 }
 
 // ── Shared ─────────────────────────────────────────────────────────────────
-function sectionTokens(opt) {
-  return {
-    project: ctx.project || '',
-    episodeCode: ctx.episodeCode || '',
-    episodeTitle: ctx.episodeTitle || '',
-    chapterNum: opt?.dataset.num || '',
-    chapterLabel: opt?.dataset.label || '',
-  };
-}
-
-function currentTokens() {
-  if (settings.mode === 'paste') {
-    const code = $('pasteCode').value.trim() || 'audio';
-    const label = $('pasteLabel').value.trim();
-    return { project: '', episodeCode: code, episodeTitle: '', chapterNum: '', chapterLabel: label };
-  }
-  return sectionTokens($('chapter').selectedOptions[0]);
+function pasteTokens() {
+  const code = $('pasteCode').value.trim() || 'audio';
+  const label = $('pasteLabel').value.trim();
+  return { project: '', episodeCode: code, episodeTitle: '', chapterNum: '', chapterLabel: label };
 }
 
 function updatePreview() {
-  const tokens = currentTokens();
-  if (settings.mode === 'companion' && $('saveTarget').value === 'project') {
-    const slug = $('chapter').value || 'Chapter_??';
-    $('filenamePreview').textContent = `↳ ${ctx.episodeCode || '??'} audio folder / ${ctx.episodeCode}_${slug}.mp3`;
+  // Only the paste flow has a single deterministic filename to preview;
+  // companion mode shows its target via the section list + Save-to selector.
+  if (settings.mode === 'paste') {
+    $('filenamePreview').textContent = `↳ Downloads/${buildDownloadPath(settings, pasteTokens())}`;
   } else {
-    $('filenamePreview').textContent = `↳ Downloads/${buildDownloadPath(settings, tokens)}`;
+    $('filenamePreview').textContent = '';
   }
 }
 
-// Queue just the selected section (or the pasted text).
+// Styled confirmation overlay → resolves true (OK) / false (Cancel).
+function confirmDialog(title, body, okText = 'Queue') {
+  return new Promise((resolve) => {
+    $('confirmTitle').textContent = title;
+    $('confirmBody').textContent = body;
+    $('confirmOk').textContent = okText;
+    const dlg = $('confirm');
+    dlg.hidden = false;
+    const close = (val) => {
+      dlg.hidden = true;
+      $('confirmOk').onclick = null;
+      $('confirmCancel').onclick = null;
+      resolve(val);
+    };
+    $('confirmOk').onclick = () => close(true);
+    $('confirmCancel').onclick = () => close(false);
+  });
+}
+
+// Panel connection test — verifies the whole chain from where you work.
+async function testConnection() {
+  const out = $('connStatus');
+  const set = (t, c) => {
+    out.textContent = t;
+    out.style.color = c;
+  };
+  $('testConn').disabled = true;
+  set('Testing…', 'var(--muted)');
+  try {
+    const url = settings.studioBaseUrl || '';
+    const local = /localhost|127\.0\.0\.1/.test(url);
+    if (!local) {
+      let pat = null;
+      try {
+        const u = new URL(url);
+        pat = `${u.protocol}//${u.hostname}/*`;
+      } catch {
+        /* invalid url */
+      }
+      const granted = pat ? await chrome.permissions.contains({ origins: [pat] }).catch(() => false) : false;
+      if (!granted) {
+        set('✗ No host access — Settings → Grant access.', '#b00');
+        return;
+      }
+    }
+    const projects = await client.listProjects();
+    const n = Array.isArray(projects) ? projects.length : (projects.projects || []).length;
+    set(`✓ ${n} project${n !== 1 ? 's' : ''}`, '#0a7a0a');
+    await loadCompanionData(); // refresh dropdowns now that we're reachable
+  } catch (e) {
+    const local = /localhost|127\.0\.0\.1/.test(settings.studioBaseUrl || '');
+    set(`✗ ${e.message}. ${local ? 'Running?' : 'Running, granted, logged in?'}`, '#b00');
+  } finally {
+    $('testConn').disabled = false;
+  }
+}
+
+// Paste mode: queue the pasted text as a single Download item.
 async function onGenerate() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
-  const autoTag = $('autoTag').checked;
+  const text = $('pasteText').value.trim();
+  if (!text) return status('Paste some script text first.');
   persist({ ...rememberVoice(voice), saveTarget: $('saveTarget').value });
-
-  let item;
-  if (settings.mode === 'paste') {
-    const text = $('pasteText').value.trim();
-    if (!text) return status('Paste some script text first.');
-    const code = $('pasteCode').value.trim() || 'audio';
-    const label = $('pasteLabel').value.trim() || code;
-    item = {
-      kind: 'paste',
-      text, // worker uses this directly (no Story Studio fetch)
-      target: 'download',
-      provider: currentProvider(),
-      voice,
-      autoTag,
-      label,
-      episodeCode: code,
-      episodeTitle: '',
-      project: '',
-      chapterNum: '',
-      chapterLabel: $('pasteLabel').value.trim() || '',
-    };
-  } else {
-    const opt = $('chapter').selectedOptions[0];
-    if (!opt) return status('Nothing to generate — no missing audio.');
-    item = itemFromOption(opt);
-  }
-
+  const code = $('pasteCode').value.trim() || 'audio';
+  const label = $('pasteLabel').value.trim() || code;
+  const item = {
+    kind: 'paste',
+    text,
+    target: 'download',
+    provider: currentProvider(),
+    voice,
+    autoTag: $('autoTag').checked,
+    label,
+    episodeCode: code,
+    episodeTitle: '',
+    project: '',
+    chapterNum: '',
+    chapterLabel: $('pasteLabel').value.trim() || '',
+  };
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
   if (!r?.ok) return status(`Queue failed: ${r?.error || NORESP}`);
   status(r.added ? `Queued ${item.label}.` : 'Already in the queue.');

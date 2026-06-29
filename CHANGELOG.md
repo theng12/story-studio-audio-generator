@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — Multi-select, in-panel test, auto-save, styled dialogs
+
+Four UX features adapted from the sibling Flow extension:
+
+- **Multi-select chapter list.** Companion mode replaces the single
+  chapter/intro dropdown with a checkbox list + **select-all**, and a
+  **"Queue selected (N)"** button — queue any subset (e.g. chapters 3, 5, 7) in
+  one go. Already-voiced chapters show a ✓ badge and become selectable only in
+  re-voice mode. Header shows `done/total have audio`.
+- **In-panel "Test connection"** button + status chip — quick health check from
+  where you work, not just Settings.
+- **Settings auto-save** — every field saves as you edit (debounced), with a
+  "Saved" flash. The Save button stays too.
+- **Styled confirmation dialog** — replaces the native `confirm()` popup with an
+  in-panel overlay for the queue confirmations.
+
 ## 0.2.0 — Portable, remote-capable Story Studio connection
 
 - **Port-agnostic localhost permissions.** `host_permissions` now uses host-level

@@ -34,6 +34,21 @@ async function load() {
   $('testConnection').addEventListener('click', testConnection);
   $('studioBaseUrl').addEventListener('input', refreshGrantStatus);
   refreshGrantStatus();
+
+  // Auto-save every field as you edit — no "did it save?" doubt. The explicit
+  // Save button stays as a belt-and-suspenders.
+  const allFields = [...FIELDS, 'studioUsername', 'studioPassword', 'elevenLabsKey', 'openaiKey'];
+  for (const id of allFields) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', autoSave);
+  }
+}
+
+let autoTimer = null;
+function autoSave() {
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(save, 400);
 }
 
 async function save() {
