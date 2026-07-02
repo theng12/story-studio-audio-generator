@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="popup.css" />
     <title>Story Studio TTS</title>
+    <!-- Set an initial theme from the OS to avoid a light flash; the stored
+         preference is applied a moment later once settings load. -->
+    <script>
+      document.documentElement.setAttribute(
+        'data-theme',
+        matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      );
+    </script>
   </head>
   <body>
     <header>

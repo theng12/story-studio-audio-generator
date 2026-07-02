@@ -4,10 +4,29 @@
     <meta charset="utf-8" />
     <title>Story Studio TTS — Settings</title>
     <link rel="stylesheet" href="../popup/popup.css" />
-    <style>body { width: 420px; }</style>
+    <style>
+      /* Center the settings column on the full-width options page. */
+      body { width: 100%; max-width: none; padding: 24px 16px; }
+      .settings-wrap { width: 100%; max-width: 480px; margin: 0 auto; }
+    </style>
+    <script>
+      document.documentElement.setAttribute(
+        'data-theme',
+        matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      );
+    </script>
   </head>
   <body>
+    <div class="settings-wrap">
     <header><h1>Story Studio TTS — Settings</h1></header>
+
+    <label>Theme
+      <select id="theme">
+        <option value="system">System (match OS)</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
 
     <label>Mode
       <select id="mode">
@@ -73,6 +92,7 @@
 
     <button id="save" class="primary">Save</button>
     <p id="status" class="muted"></p>
+    </div>
 
     <script type="module" src="options.js"></script>
   </body>

@@ -11,6 +11,8 @@
 
 export const DEFAULTS = {
   mode: 'paste', // "companion" | "paste" — user picks on first run
+  // UI color theme: 'light' | 'dark' | 'system' (follow the OS setting).
+  theme: 'system',
   // Story Studio server. Default port 8766, but fully editable — set this to a
   // localhost URL (any port; loopback bypasses auth) or a remote/Tailscale URL
   // like http://mac-mini.tailXXXX.ts.net:8766 (needs Grant access + login).

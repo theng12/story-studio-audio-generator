@@ -1,4 +1,5 @@
 import { getSettings, saveSettings, getCredentials } from '../lib/config.js';
+import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { buildDownloadPath } from '../lib/naming.js';
 
@@ -29,6 +30,7 @@ const isEligible = (ep) =>
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+  await initTheme();
   settings = await getSettings();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('generate').addEventListener('click', onGenerate);

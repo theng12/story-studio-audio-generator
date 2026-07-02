@@ -8,9 +8,10 @@ import {
   DEFAULTS,
 } from '../lib/config.js';
 import { StudioClient } from '../lib/story-studio.js';
+import { initTheme, setTheme } from '../lib/theme.js';
 
 const $ = (id) => document.getElementById(id);
-const FIELDS = ['mode', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate', 'fishVoice'];
+const FIELDS = ['mode', 'theme', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate', 'fishVoice'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
 
@@ -19,8 +20,11 @@ function toggleCompanion() {
 }
 
 async function load() {
+  await initTheme();
   const s = await getSettings();
   for (const f of FIELDS) $(f).value = s[f] ?? DEFAULTS[f] ?? '';
+  // Apply the theme live as soon as it's changed (before the debounced save).
+  $('theme').addEventListener('change', () => setTheme($('theme').value));
   const cred = await getCredentials();
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
