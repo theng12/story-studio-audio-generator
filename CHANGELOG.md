@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1 — Settings fixes
+
+- **Settings page buttons work again.** The options page listed a `fishVoice`
+  field that doesn't exist there, so loading it threw before the Save / Grant
+  access / Test connection buttons were wired — clicking them did nothing. Fixed
+  (the loops are now null-safe), so all three give their feedback again: Save
+  flashes "✓ Saved", Grant/Test report their result inline.
+- **"✨ What's new" button sizing.** It was inheriting the 16px icon-link size;
+  small text links (What's new, Reload, queue controls) are now 12px.
+
 ## 0.5.0 — Human pacing + full queue controls
 
 Queue quality-of-life, adapted from the sibling Bulk Asset extension:

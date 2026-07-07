@@ -11,7 +11,10 @@ import { StudioClient } from '../lib/story-studio.js';
 import { initTheme, setTheme } from '../lib/theme.js';
 
 const $ = (id) => document.getElementById(id);
-const FIELDS = ['mode', 'theme', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate', 'fishVoice'];
+// Fields that have an input on THIS page. (The voice lives in the side panel,
+// not here — don't list fishVoice or $(f) is null and load() aborts before the
+// buttons are wired.)
+const FIELDS = ['mode', 'theme', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
 
@@ -22,7 +25,7 @@ function toggleCompanion() {
 async function load() {
   await initTheme();
   const s = await getSettings();
-  for (const f of FIELDS) $(f).value = s[f] ?? DEFAULTS[f] ?? '';
+  for (const f of FIELDS) if ($(f)) $(f).value = s[f] ?? DEFAULTS[f] ?? '';
   // Apply the theme live as soon as it's changed (before the debounced save).
   $('theme').addEventListener('change', () => setTheme($('theme').value));
   const cred = await getCredentials();
@@ -67,7 +70,7 @@ function showSaved(msg = '✓ Saved') {
 
 async function save() {
   const patch = {};
-  for (const f of FIELDS) patch[f] = $(f).value.trim();
+  for (const f of FIELDS) if ($(f)) patch[f] = $(f).value.trim();
   await saveSettings(patch);
   await saveCredentials({
     username: $('studioUsername').value.trim(),

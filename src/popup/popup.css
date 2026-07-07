@@ -113,6 +113,9 @@ button.primary {
   font-weight: 600;
 }
 button.link { border: none; background: none; font-size: 16px; padding: 2px 6px; }
+/* Text links (What's new, Reload, queue controls) stay small — otherwise the
+   16px above makes them, especially "✨ What's new", look oversized. */
+button.link.small { font-size: 12px; padding: 2px 4px; }
 header .settings-gear {
   display: inline-flex;
   width: 38px;
