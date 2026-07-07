@@ -1,14 +1,20 @@
 # Changelog
 
+## 0.6.1 — ElevenLabs 5000-char chunking
+
+- All three ElevenLabs models share the same **5000-character per-request cap**
+  (not the higher docs limits), so chunking now stays under 5000 for every model
+  — no more oversized requests on Multilingual v2 / Flash v2.5.
+
 ## 0.6.0 — Model & voice controls (ElevenLabs, OpenAI, fish)
 
 A new **Voice settings** panel that adapts to the provider — and, for
 ElevenLabs, to the chosen model:
 
 - **ElevenLabs model picker** — **Multilingual v2** (lifelike quality),
-  **Flash v2.5** (fast & affordable), or **v3** (most expressive, alpha). Text is
-  chunked to each model's own limit (10k / 40k / 5k). Works for both the
-  API-key and web-session ElevenLabs providers.
+  **Flash v2.5** (fast & affordable), or **v3** (most expressive, alpha). Long
+  text is chunked to stay under ElevenLabs' 5000-char per-request cap. Works for
+  both the API-key and web-session ElevenLabs providers.
 - **ElevenLabs voice settings** — Stability, Similarity, Style exaggeration,
   Speed, and Speaker boost, sent as `voice_settings`. The controls follow the
   model: v2/Flash show continuous sliders for everything, while **v3** shows a

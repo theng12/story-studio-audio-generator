@@ -37,8 +37,8 @@ Queue, save-back, and naming are shared across all providers.
 
 - The ElevenLabs-web token refresh is what keeps sessions from going stale — don't
   remove it.
-- Chunking limits differ per provider/model (5000 ElevenLabs-web / 4096 OpenAI;
-  ElevenLabs API-key is per-model — see `ELEVEN_MODELS` in `lib/providers.js`).
+- Chunking limits: all ElevenLabs models cap at 5000 chars/request (web + API
+  key), OpenAI at 4096 — see `ELEVEN_MODELS` / `PROVIDERS` in `lib/providers.js`.
 - Per-provider tuning (model + voice settings) lives in `settings.providerSettings`
   (`getProviderSettings`) and is snapshotted onto each queue item; the worker
   builds ElevenLabs `voice_settings` via `buildElevenVoiceSettings`.
