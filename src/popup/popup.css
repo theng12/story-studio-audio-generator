@@ -147,6 +147,15 @@ label.check input { width: auto; margin: 0; }
 .pace-state { font-size: 11px; color: var(--ok); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 .pace-state.off { color: var(--muted); }
 
+/* Voice settings card */
+.vs-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; background: var(--surface); }
+.vs-head { margin-bottom: 4px; }
+.vs-model { margin-top: 4px; }
+.vs-row { margin-top: 8px; }
+.vs-row .mini { font-size: 11px; color: var(--muted); }
+.vs-row input[type='range'] { width: 100%; margin: 2px 0 0; padding: 0; accent-color: var(--link); cursor: pointer; }
+#vsSpeakerBoostRow { margin-top: 10px; }
+
 /* Live queue status bar */
 .genstatus {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;

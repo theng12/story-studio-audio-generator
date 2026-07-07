@@ -1,7 +1,8 @@
-import { getSettings, saveSettings, getCredentials } from '../lib/config.js';
+import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDER_SETTING_DEFAULTS } from '../lib/config.js';
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { buildDownloadPath } from '../lib/naming.js';
+import { ELEVEN_MODELS, ELEVEN_STABILITY_MODES, elevenModel } from '../lib/providers.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
@@ -61,9 +62,12 @@ async function init() {
   // auto-tag option only for fish.audio (it's a fish-specific feature).
   $('provider').value = settings.provider || 'fish';
   applyProviderUI();
+  wireVoiceSettings();
+  renderVoiceSettings();
   $('provider').addEventListener('change', async () => {
     await persist({ provider: currentProvider() });
     applyProviderUI();
+    renderVoiceSettings();
     await initVoices();
   });
 
@@ -202,6 +206,143 @@ function applyProviderUI() {
 async function onOpenProviderPage() {
   const r = await chrome.runtime.sendMessage({ type: 'openProviderPage', provider: currentProvider() });
   if (!r?.ok) status(r?.error || NORESP);
+}
+
+// ── Voice settings (per provider, model-aware for ElevenLabs) ────────────────
+const currentProviderSettings = () => getProviderSettings(settings, currentProvider());
+const isElevenProvider = (p) => p === 'elevenlabs' || p === 'elevenlabs_web';
+const fmt2 = (v) => Number(v).toFixed(2);
+// Snap a continuous stability to v3's nearest discrete preset (0 / 0.5 / 1).
+const nearestStabilityMode = (v) =>
+  [0, 0.5, 1].reduce((a, b) => (Math.abs(b - Number(v)) < Math.abs(a - Number(v)) ? b : a), 0.5);
+// Speed slider range differs per provider (ElevenLabs 0.7–1.2, OpenAI 0.25–4, fish 0.5–2).
+const speedRange = (p) =>
+  p === 'openai' ? { min: 0.25, max: 4 } : p === 'fish' ? { min: 0.5, max: 2 } : { min: 0.7, max: 1.2 };
+
+// Persist a change to the current provider's settings.
+async function saveProviderSetting(patch) {
+  const p = currentProvider();
+  const next = { ...getProviderSettings(settings, p), ...patch };
+  await persist({ providerSettings: { ...(settings.providerSettings || {}), [p]: next } });
+}
+
+// Populate + show/hide the voice-setting controls for the current provider and
+// (for ElevenLabs) the selected model.
+function renderVoiceSettings() {
+  const p = currentProvider();
+  const ps = currentProviderSettings();
+  const eleven = isElevenProvider(p);
+  let meta = null;
+
+  // Model (ElevenLabs only).
+  $('vsModelRow').hidden = !eleven;
+  if (eleven) {
+    const sel = $('vsModel');
+    if (!sel.options.length)
+      for (const m of ELEVEN_MODELS) {
+        const o = document.createElement('option');
+        o.value = m.id;
+        o.textContent = m.label;
+        sel.appendChild(o);
+      }
+    sel.value = ps.model || ELEVEN_MODELS[0].id;
+    meta = elevenModel(sel.value);
+  }
+
+  // Stability (ElevenLabs): slider for v2/flash, discrete Creative/Natural/Robust for v3.
+  $('vsStabilityRow').hidden = !eleven;
+  if (eleven) {
+    const discrete = meta.stability === 'discrete';
+    $('vsStability').hidden = discrete;
+    $('vsStabilityMode').hidden = !discrete;
+    if (discrete) {
+      const sm = $('vsStabilityMode');
+      if (!sm.options.length)
+        for (const m of ELEVEN_STABILITY_MODES) {
+          const o = document.createElement('option');
+          o.value = String(m.value);
+          o.textContent = m.label;
+          sm.appendChild(o);
+        }
+      sm.value = String(nearestStabilityMode(ps.stability));
+      $('vsStabilityVal').textContent = ELEVEN_STABILITY_MODES.find((m) => String(m.value) === sm.value)?.label || '';
+    } else {
+      $('vsStability').value = ps.stability;
+      $('vsStabilityVal').textContent = fmt2(ps.stability);
+    }
+  }
+
+  // Similarity (ElevenLabs).
+  $('vsSimilarityRow').hidden = !eleven;
+  if (eleven) {
+    $('vsSimilarity').value = ps.similarity;
+    $('vsSimilarityVal').textContent = fmt2(ps.similarity);
+  }
+
+  // Style exaggeration (ElevenLabs v2/flash only — v3 uses audio tags).
+  const showStyle = eleven && meta.style;
+  $('vsStyleRow').hidden = !showStyle;
+  if (showStyle) {
+    $('vsStyle').value = ps.style;
+    $('vsStyleVal').textContent = fmt2(ps.style);
+  }
+
+  // Speed (ElevenLabs v2/flash, OpenAI, fish — not ElevenLabs v3).
+  const showSpeed = p === 'openai' || p === 'fish' || (eleven && meta.speed);
+  $('vsSpeedRow').hidden = !showSpeed;
+  if (showSpeed) {
+    const el = $('vsSpeed');
+    const { min, max } = speedRange(p);
+    el.min = min;
+    el.max = max;
+    el.step = 0.05;
+    el.value = ps.speed ?? 1;
+    $('vsSpeedVal').textContent = `${Number(ps.speed ?? 1).toFixed(2)}×`;
+  }
+
+  // Speaker boost (ElevenLabs).
+  $('vsSpeakerBoostRow').hidden = !eleven;
+  if (eleven) $('vsSpeakerBoost').checked = ps.speakerBoost !== false;
+
+  // Hide the whole card when a provider exposes nothing (shouldn't happen — all
+  // four expose at least one control — but keeps it robust).
+  const anything = eleven || showSpeed;
+  $('voiceSettings').hidden = !anything;
+}
+
+// Wire the voice-setting controls (called once from init).
+function wireVoiceSettings() {
+  $('vsModel').addEventListener('change', async () => {
+    await saveProviderSetting({ model: $('vsModel').value });
+    renderVoiceSettings();
+  });
+  $('vsStability').addEventListener('input', () => {
+    $('vsStabilityVal').textContent = fmt2($('vsStability').value);
+    saveProviderSetting({ stability: Number($('vsStability').value) });
+  });
+  $('vsStabilityMode').addEventListener('change', () => {
+    $('vsStabilityVal').textContent =
+      ELEVEN_STABILITY_MODES.find((m) => String(m.value) === $('vsStabilityMode').value)?.label || '';
+    saveProviderSetting({ stability: Number($('vsStabilityMode').value) });
+  });
+  $('vsSimilarity').addEventListener('input', () => {
+    $('vsSimilarityVal').textContent = fmt2($('vsSimilarity').value);
+    saveProviderSetting({ similarity: Number($('vsSimilarity').value) });
+  });
+  $('vsStyle').addEventListener('input', () => {
+    $('vsStyleVal').textContent = fmt2($('vsStyle').value);
+    saveProviderSetting({ style: Number($('vsStyle').value) });
+  });
+  $('vsSpeed').addEventListener('input', () => {
+    $('vsSpeedVal').textContent = `${Number($('vsSpeed').value).toFixed(2)}×`;
+    saveProviderSetting({ speed: Number($('vsSpeed').value) });
+  });
+  $('vsSpeakerBoost').addEventListener('change', () => saveProviderSetting({ speakerBoost: $('vsSpeakerBoost').checked }));
+  $('vsReset').addEventListener('click', async () => {
+    const def = PROVIDER_SETTING_DEFAULTS[currentProvider()];
+    if (def) await saveProviderSetting({ ...def });
+    renderVoiceSettings();
+  });
 }
 
 // ── What's new (changelog) ──────────────────────────────────────────────────
@@ -533,6 +674,7 @@ function itemFromSection(s) {
     provider: currentProvider(),
     voice: $('voice').value,
     autoTag: $('autoTag').checked,
+    providerSettings: currentProviderSettings(),
     project: ctx.project || '',
     chapterNum: s.num != null ? pad(s.num) : '',
     chapterLabel: s.label,
@@ -583,6 +725,7 @@ async function onQueueProject() {
       provider: currentProvider(),
       voice,
       autoTag: $('autoTag').checked,
+      providerSettings: currentProviderSettings(),
     },
   });
   status(
@@ -911,6 +1054,7 @@ async function onGenerate() {
     provider: currentProvider(),
     voice,
     autoTag: $('autoTag').checked,
+    providerSettings: currentProviderSettings(),
     label,
     episodeCode: code,
     episodeTitle: '',

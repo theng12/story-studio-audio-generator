@@ -69,18 +69,27 @@ function showSaved(msg = '✓ Saved') {
 }
 
 async function save() {
-  const patch = {};
-  for (const f of FIELDS) if ($(f)) patch[f] = $(f).value.trim();
-  await saveSettings(patch);
-  await saveCredentials({
-    username: $('studioUsername').value.trim(),
-    password: $('studioPassword').value, // not trimmed — passwords may have spaces
-  });
-  await saveApiKeys({
-    elevenLabsKey: $('elevenLabsKey').value.trim(),
-    openaiKey: $('openaiKey').value.trim(),
-  });
-  showSaved();
+  try {
+    const patch = {};
+    for (const f of FIELDS) if ($(f)) patch[f] = $(f).value.trim();
+    await saveSettings(patch);
+    await saveCredentials({
+      username: $('studioUsername').value.trim(),
+      password: $('studioPassword').value, // not trimmed — passwords may have spaces
+    });
+    await saveApiKeys({
+      elevenLabsKey: $('elevenLabsKey').value.trim(),
+      openaiKey: $('openaiKey').value.trim(),
+    });
+    showSaved();
+  } catch (e) {
+    // Never fail silently — a storage error must be visible, not look like
+    // "nothing saved".
+    const el = $('status');
+    el.textContent = `Couldn't save: ${e.message || e}`;
+    el.style.color = COLOR.err;
+    el.style.fontWeight = '600';
+  }
 }
 
 // ── Host-permission self-grant (so a remote/Tailscale server works without a

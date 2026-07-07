@@ -36,7 +36,7 @@ function callMain(op, payload, timeoutMs = 120000) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'eleven:generate') {
-    callMain('generate', { text: msg.text, voice: msg.voice })
+    callMain('generate', { text: msg.text, voice: msg.voice, model: msg.model, voiceSettings: msg.voiceSettings })
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;

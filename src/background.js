@@ -9,10 +9,10 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getSettings, getApiKeys } from './lib/config.js';
+import { getSettings, getApiKeys, getProviderSettings } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { buildDownloadPath } from './lib/naming.js';
-import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate } from './lib/providers.js';
+import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate, buildElevenVoiceSettings } from './lib/providers.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -122,6 +122,10 @@ async function produceAudio(job, settings) {
   const p = PROVIDERS[providerId] || PROVIDERS.fish;
   if (!job.text || !job.text.trim()) throw new Error('No script text to generate.');
 
+  // Per-provider tuning (model + voice settings / speed): the item's snapshot
+  // from when it was queued, or the current settings for a fresh call.
+  const ps = job.providerSettings || getProviderSettings(settings, providerId);
+
   if (p.type === 'webSession') {
     const voice = job.voice || settings.voiceByProvider?.[providerId] || (providerId === 'fish' ? settings.fishVoice : '');
     if (!voice) throw new Error(`No ${p.name} voice selected. Pick one in the panel.`);
@@ -130,13 +134,17 @@ async function produceAudio(job, settings) {
       type: `${p.msg}:generate`,
       text: job.text,
       voice,
-      speed: job.speed ?? 1,
+      speed: ps.speed ?? 1,
       autoTag: !!job.autoTag,
+      // ElevenLabs (web): model + voice_settings, built here so the content
+      // script stays logic-free. fish ignores these.
+      model: ps.model,
+      voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(ps, ps.model) : undefined,
     });
   }
   // apiKey provider — no browser tab needed.
   const keys = await getApiKeys();
-  return apiGenerate(providerId, { text: job.text, voice: job.voice, keys });
+  return apiGenerate(providerId, { text: job.text, voice: job.voice, keys, settings: ps });
 }
 
 // Generate one section's audio and save it (project folder or Downloads).
@@ -290,8 +298,9 @@ async function removeFromQueue(id) {
 // Expand a whole project into queue items (done worker-side so the panel stays
 // snappy). One item per missing section (intro + chapters) of every episode
 // whose script is done but audio isn't.
-async function enqueueProject({ slug, target, voice, autoTag, provider }) {
+async function enqueueProject({ slug, target, voice, autoTag, provider, providerSettings }) {
   const settings = await getSettings();
+  const ps = providerSettings || getProviderSettings(settings, provider);
   const client = new StudioClient(settings.studioBaseUrl);
   const raw = await client.listEpisodes(slug);
   const eps = (Array.isArray(raw) ? raw : raw.episodes || []).filter(
@@ -306,7 +315,7 @@ async function enqueueProject({ slug, target, voice, autoTag, provider }) {
     } catch {
       continue;
     }
-    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', target, voice, autoTag, provider })) {
+    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', target, voice, autoTag, provider, providerSettings: ps })) {
       items.push(it);
     }
   }
@@ -314,7 +323,7 @@ async function enqueueProject({ slug, target, voice, autoTag, provider }) {
 }
 
 // Build queue items from an audio-status missing_files list.
-function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag, provider }) {
+function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag, provider, providerSettings }) {
   const out = [];
   for (const f of missingFiles || []) {
     const isIntro = /_Introduction\.(mp3|wav)$/i.test(f);
@@ -334,6 +343,7 @@ function missingSectionItems(missingFiles, { slug, code, title, target, voice, a
         provider,
         voice,
         autoTag,
+        providerSettings,
         // tokens for Downloads naming:
         project: title,
         chapterNum: numStr,

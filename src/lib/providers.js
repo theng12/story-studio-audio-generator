@@ -50,6 +50,54 @@ export const PROVIDERS = {
   },
 };
 
+// ── ElevenLabs models ───────────────────────────────────────────────────────
+// The three TTS models, each with its own control set (verified against the
+// ElevenLabs docs). `maxChars` stays safely under each model's hard per-request
+// limit (v3 5k / multilingual_v2 10k / flash_v2_5 40k). v3 tunes expression with
+// audio tags rather than the style/speed sliders, and its stability is a
+// discrete Creative/Natural/Robust choice.
+export const ELEVEN_MODELS = [
+  { id: 'eleven_multilingual_v2', label: 'Multilingual v2 — lifelike quality', maxChars: 9000, style: true, speed: true, stability: 'slider' },
+  { id: 'eleven_flash_v2_5', label: 'Flash v2.5 — fast & affordable', maxChars: 30000, style: true, speed: true, stability: 'slider' },
+  { id: 'eleven_v3', label: 'v3 — most expressive (alpha)', maxChars: 4500, style: false, speed: false, stability: 'discrete' },
+];
+// v3's discrete stability presets → the numeric value the API expects.
+export const ELEVEN_STABILITY_MODES = [
+  { value: 0, label: 'Creative' },
+  { value: 0.5, label: 'Natural' },
+  { value: 1, label: 'Robust' },
+];
+export const elevenModel = (id) => ELEVEN_MODELS.find((m) => m.id === id) || ELEVEN_MODELS[0];
+
+const clamp = (n, lo, hi, dflt) => {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+};
+
+// Build the ElevenLabs `voice_settings` object for a model, including only the
+// controls that model supports. Exported so the worker can build it for the
+// web-session provider (the content script stays logic-free).
+export function buildElevenVoiceSettings(s = {}, model) {
+  const meta = elevenModel(model);
+  let stability = clamp(s.stability, 0, 1, 0.5);
+  // v3 only accepts the discrete Creative/Natural/Robust values — snap to the
+  // nearest so what's generated matches the panel's choice.
+  if (meta.stability === 'discrete') {
+    stability = ELEVEN_STABILITY_MODES.map((m) => m.value).reduce(
+      (a, b) => (Math.abs(b - stability) < Math.abs(a - stability) ? b : a),
+      0.5
+    );
+  }
+  const vs = {
+    stability,
+    similarity_boost: clamp(s.similarity, 0, 1, 0.75),
+    use_speaker_boost: s.speakerBoost !== false,
+  };
+  if (meta.style) vs.style = clamp(s.style, 0, 1, 0);
+  if (meta.speed) vs.speed = clamp(s.speed, 0.7, 1.2, 1);
+  return vs;
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
@@ -106,24 +154,24 @@ export function splitText(text, maxChars) {
 }
 
 // ── per-provider API calls (apiKey providers only) ──────────────────────────
-async function elevenGenerateChunk(text, voice, key, model) {
+async function elevenGenerateChunk(text, voice, key, model, voiceSettings) {
   const r = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_128`,
     {
       method: 'POST',
       headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-      body: JSON.stringify({ text, model_id: model }),
+      body: JSON.stringify({ text, model_id: model, voice_settings: voiceSettings }),
     }
   );
   if (!r.ok) throw new Error(`ElevenLabs ${r.status}: ${(await r.text()).slice(0, 160)}`);
   return r.arrayBuffer();
 }
 
-async function openaiGenerateChunk(text, voice, key, model) {
+async function openaiGenerateChunk(text, voice, key, model, speed) {
   const r = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, voice, input: text, response_format: 'mp3' }),
+    body: JSON.stringify({ model, voice, input: text, response_format: 'mp3', speed: clamp(speed, 0.25, 4, 1) }),
   });
   if (!r.ok) throw new Error(`OpenAI ${r.status}: ${(await r.text()).slice(0, 160)}`);
   return r.arrayBuffer();
@@ -145,18 +193,26 @@ export async function listVoices(providerId, keys) {
 }
 
 // Generate audio for an apiKey provider → { base64, mime }. Chunks long text.
-export async function generate(providerId, { text, voice, keys, model }) {
+// `settings` carries the per-provider tuning (model + voice settings / speed).
+export async function generate(providerId, { text, voice, keys, settings = {} }) {
   const p = PROVIDERS[providerId];
   const key = keys[p.keyField];
   if (!key) throw new Error(`Set your ${p.name} API key in Settings.`);
   if (!voice) throw new Error(`Pick a ${p.name} voice.`);
-  const useModel = model || p.model;
-  const chunks = splitText(text, p.maxChars);
   const buffers = [];
-  for (const chunk of chunks) {
-    if (p.id === 'elevenlabs') buffers.push(await elevenGenerateChunk(chunk, voice, key, useModel));
-    else if (p.id === 'openai') buffers.push(await openaiGenerateChunk(chunk, voice, key, useModel));
-    else throw new Error(`Provider ${providerId} has no apiKey generator.`);
+  if (p.id === 'elevenlabs') {
+    const model = settings.model || p.model;
+    const meta = elevenModel(model);
+    const vs = buildElevenVoiceSettings(settings, model);
+    for (const chunk of splitText(text, meta.maxChars)) {
+      buffers.push(await elevenGenerateChunk(chunk, voice, key, model, vs));
+    }
+  } else if (p.id === 'openai') {
+    for (const chunk of splitText(text, p.maxChars)) {
+      buffers.push(await openaiGenerateChunk(chunk, voice, key, p.model, settings.speed));
+    }
+  } else {
+    throw new Error(`Provider ${providerId} has no apiKey generator.`);
   }
   return { base64: bufToBase64(concatBuffers(buffers)), mime: 'audio/mpeg' };
 }

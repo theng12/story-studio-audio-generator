@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0 — Model & voice controls (ElevenLabs, OpenAI, fish)
+
+A new **Voice settings** panel that adapts to the provider — and, for
+ElevenLabs, to the chosen model:
+
+- **ElevenLabs model picker** — **Multilingual v2** (lifelike quality),
+  **Flash v2.5** (fast & affordable), or **v3** (most expressive, alpha). Text is
+  chunked to each model's own limit (10k / 40k / 5k). Works for both the
+  API-key and web-session ElevenLabs providers.
+- **ElevenLabs voice settings** — Stability, Similarity, Style exaggeration,
+  Speed, and Speaker boost, sent as `voice_settings`. The controls follow the
+  model: v2/Flash show continuous sliders for everything, while **v3** shows a
+  discrete **Creative / Natural / Robust** stability (it steers expression with
+  audio tags instead of style/speed, so those are hidden).
+- **Speed for OpenAI (0.25–4×) and fish.audio (0.5–2×)** too.
+- Settings are **per provider**, persist, and are snapshotted onto each queue
+  item when you queue — so changing them later doesn't rewrite pending work.
+  A **Reset** link restores a provider's defaults.
+
 ## 0.5.1 — Settings fixes
 
 - **Settings page buttons work again.** The options page listed a `fishVoice`

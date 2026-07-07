@@ -60,7 +60,29 @@ export const DEFAULTS = {
   // and marking it failed (0 = off). The manual "Retry failed" button always
   // works regardless of this.
   maxRetries: 1,
+  // Per-provider generation settings (model + voice tuning). Filled in lazily
+  // from PROVIDER_SETTING_DEFAULTS via getProviderSettings(); only the keys the
+  // user changes are stored here. ElevenLabs is model-aware (see providers.js).
+  providerSettings: {},
 };
+
+// Defaults for the per-provider tuning controls. ElevenLabs (web + API key)
+// share the same shape — a model plus the voice_settings the ElevenLabs API
+// accepts. OpenAI / fish just expose speed.
+export const PROVIDER_SETTING_DEFAULTS = {
+  elevenlabs: { model: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1, speakerBoost: true },
+  elevenlabs_web: { model: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1, speakerBoost: true },
+  openai: { speed: 1 },
+  fish: { speed: 1 },
+};
+
+// Merge a provider's saved settings over its defaults.
+export function getProviderSettings(settings, providerId) {
+  return {
+    ...(PROVIDER_SETTING_DEFAULTS[providerId] || {}),
+    ...((settings.providerSettings || {})[providerId] || {}),
+  };
+}
 
 const STORAGE_KEY = 'settings';
 

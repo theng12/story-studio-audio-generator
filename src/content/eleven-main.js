@@ -99,15 +99,17 @@
     return (j.voices || []).map((v) => ({ id: v.voice_id, title: v.name }));
   }
 
-  async function generate({ text, voice, model }) {
+  async function generate({ text, voice, model, voiceSettings }) {
     if (!text || !text.trim()) throw new Error('No text to speak.');
     if (!voice) throw new Error('Pick an ElevenLabs voice.');
     const buffers = [];
     for (const chunk of splitText(text, MAX_CHARS)) {
+      const body = { text: chunk, model_id: model || MODEL };
+      if (voiceSettings) body.voice_settings = voiceSettings;
       const r = await authedFetch(`/text-to-speech/${encodeURIComponent(voice)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-        body: JSON.stringify({ text: chunk, model_id: model || MODEL }),
+        body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error(`ElevenLabs ${r.status}: ${(await r.text()).slice(0, 160)}`);
       buffers.push(await r.arrayBuffer());

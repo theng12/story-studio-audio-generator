@@ -90,6 +90,41 @@
       </div>
     </label>
 
+    <!-- Provider / model-specific voice tuning -->
+    <section id="voiceSettings" class="vs-card" hidden>
+      <div class="row between vs-head">
+        <span class="muted small">Voice settings</span>
+        <button id="vsReset" class="link small" title="Reset to defaults">Reset</button>
+      </div>
+
+      <label id="vsModelRow" class="vs-model">Model
+        <select id="vsModel"></select>
+      </label>
+
+      <div id="vsStabilityRow" class="vs-row">
+        <div class="row between"><span class="mini">Stability</span><span id="vsStabilityVal" class="mini"></span></div>
+        <input id="vsStability" type="range" min="0" max="1" step="0.05" />
+        <select id="vsStabilityMode" hidden></select>
+      </div>
+
+      <div id="vsSimilarityRow" class="vs-row">
+        <div class="row between"><span class="mini">Similarity</span><span id="vsSimilarityVal" class="mini"></span></div>
+        <input id="vsSimilarity" type="range" min="0" max="1" step="0.05" />
+      </div>
+
+      <div id="vsStyleRow" class="vs-row">
+        <div class="row between"><span class="mini">Style exaggeration</span><span id="vsStyleVal" class="mini"></span></div>
+        <input id="vsStyle" type="range" min="0" max="1" step="0.05" />
+      </div>
+
+      <div id="vsSpeedRow" class="vs-row">
+        <div class="row between"><span class="mini">Speed</span><span id="vsSpeedVal" class="mini"></span></div>
+        <input id="vsSpeed" type="range" min="0.7" max="1.2" step="0.05" />
+      </div>
+
+      <label class="check" id="vsSpeakerBoostRow"><input type="checkbox" id="vsSpeakerBoost" /> Speaker boost</label>
+    </section>
+
     <label id="saveTargetLabel">Save to
       <select id="saveTarget">
         <option value="project">Story Studio project folder</option>
