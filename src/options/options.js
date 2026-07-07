@@ -55,6 +55,16 @@ function autoSave() {
   autoTimer = setTimeout(save, 400);
 }
 
+let savedTimer = null;
+function showSaved(msg = '✓ Saved') {
+  const el = $('status');
+  el.textContent = msg;
+  el.style.color = 'var(--ok)';
+  el.style.fontWeight = '600';
+  clearTimeout(savedTimer);
+  savedTimer = setTimeout(() => (el.textContent = ''), 2500);
+}
+
 async function save() {
   const patch = {};
   for (const f of FIELDS) patch[f] = $(f).value.trim();
@@ -67,8 +77,7 @@ async function save() {
     elevenLabsKey: $('elevenLabsKey').value.trim(),
     openaiKey: $('openaiKey').value.trim(),
   });
-  $('status').textContent = 'Saved.';
-  setTimeout(() => ($('status').textContent = ''), 1500);
+  showSaved();
 }
 
 // ── Host-permission self-grant (so a remote/Tailscale server works without a
