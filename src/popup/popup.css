@@ -131,14 +131,47 @@ header .settings-gear:focus-visible { outline: 2px solid var(--accent); outline-
 button:disabled { opacity: 0.5; cursor: default; }
 label.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); margin-top: 10px; }
 label.check input { width: auto; margin: 0; }
-#queueProject { width: 100%; margin-top: 6px; padding: 8px; border-radius: 999px; }
-.queuebar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin-top: 10px; padding: 6px 10px;
-  border: 1px solid var(--border); border-radius: 8px;
-  font-size: 12px; color: var(--fg); background: var(--surface);
+#queueEpisode, #queueProject { width: 100%; margin-top: 6px; padding: 8px; border-radius: 999px; }
+.hgroup { display: flex; align-items: center; gap: 8px; }
+
+/* Human pace card */
+.pace-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 12px; background: var(--surface); }
+.pace-card select { margin-top: 6px; }
+.pace-card .mini { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.pace-custom { align-items: flex-end; gap: 8px; margin-top: 6px; }
+.pace-custom .grow { flex: 1; }
+.pace-custom input { margin-top: 0; }
+.pace-state { font-size: 11px; color: var(--ok); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.pace-state.off { color: var(--muted); }
+
+/* Live queue status bar */
+.genstatus {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 12px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 13px; font-weight: 600;
+  transition: box-shadow .2s, border-color .2s, background .2s;
 }
-.queuebar .link { color: var(--danger); font-size: 11px; }
+.genstatus .gs-state { display: flex; align-items: center; gap: 7px; }
+.genstatus .gs-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.genstatus .gs-counts { display: flex; gap: 10px; font-size: 12px; font-weight: 500; }
+.genstatus .gs-done { color: var(--ok); }
+.genstatus .gs-failed { color: var(--danger); }
+.genstatus .gs-left { color: var(--muted); }
+.genstatus.idle { opacity: 0.7; }
+.genstatus.running { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 30%, transparent); }
+.genstatus.running .gs-dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: gs-pulse 1.2s ease-in-out infinite; }
+.genstatus.paused { border-color: #e0a458; background: color-mix(in srgb, #e0a458 14%, transparent); }
+.genstatus.paused .gs-dot { background: #e0a458; }
+.genstatus.done { border-color: var(--ok); }
+.genstatus.done .gs-dot { background: var(--ok); }
+@keyframes gs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Queue controls row */
+.queue-controls { margin-top: 8px; }
+.queue-controls .link { font-size: 12px; }
+#pauseQueue, #retryFailed { color: var(--link); }
+#clearQueue { color: var(--danger); }
 .queuelist {
   list-style: none; margin: 6px 0 0; padding: 0;
   max-height: 200px; overflow-y: auto;
@@ -155,6 +188,9 @@ label.check input { width: auto; margin: 0; }
 .q-running .qlabel { font-weight: 600; }
 .q-failed .qlabel { color: var(--danger); }
 .qremove { color: var(--danger); font-size: 13px; border: none; background: none; padding: 0 4px; cursor: pointer; }
+.qactions { display: flex; align-items: center; gap: 2px; flex: none; }
+.qretry { color: var(--link); font-size: 13px; border: none; background: none; padding: 0 4px; cursor: pointer; }
+.qretry:hover { color: var(--ok); }
 .muted { color: var(--muted); font-size: 11px; }
 .small { font-size: 12px; }
 #filenamePreview { word-break: break-all; }

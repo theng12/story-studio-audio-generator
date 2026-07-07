@@ -16,6 +16,11 @@ import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate } from 
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
+// User-requested pause: the in-flight item finishes, then the loop stops until
+// Resume. Human-pace timing: when the next generation is allowed to start.
+const PAUSE_KEY = 'queuePaused';
+const NEXT_RUN_KEY = 'nextRunAt';
+const isPaused = async () => !!(await chrome.storage.local.get(PAUSE_KEY))[PAUSE_KEY];
 
 // Small guards so a missing/disabled API can never break top-level evaluation
 // (which would stop the message listener from registering — symptom: every
@@ -180,16 +185,44 @@ async function generateAndSave(job, settings) {
 }
 
 // ── status (persisted so the panel survives close/reopen) ───────────────────
-async function writeStatus(text, kind = 'info') {
+// `details` can carry a live countdown ({ countdownUntil, countdownLabel }) that
+// the panel ticks down each second.
+async function writeStatus(text, kind = 'info', details = {}) {
   try {
-    await chrome.storage.local.set({ lastStatus: { text, kind, ts: Date.now() } });
+    await chrome.storage.local.set({ lastStatus: { text, kind, ts: Date.now(), ...details } });
   } catch {
     /* best-effort */
   }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const politeGap = () => 2500 + Math.floor(Math.random() * 3500); // 2.5–6s
+
+// ── human pacing ────────────────────────────────────────────────────────────
+// A randomised gap (from settings) between generations so a web session is
+// never flooded. The gap is armed AFTER each generation and waited out before
+// the next one starts — and it's interruptible by Pause.
+function randomHumanDelayMs(settings) {
+  const min = Math.max(0, Math.round(Number(settings.humanDelayMinSec) || 0));
+  const max = Math.max(min, Math.round(Number(settings.humanDelayMaxSec) || 0));
+  return (min + Math.floor(Math.random() * (max - min + 1))) * 1000;
+}
+async function armHumanDelay(settings) {
+  await chrome.storage.local.set({ [NEXT_RUN_KEY]: Date.now() + randomHumanDelayMs(settings) });
+}
+async function waitForNextRun(item) {
+  for (;;) {
+    if (await isPaused()) return;
+    const { [NEXT_RUN_KEY]: nextRunAt = 0 } = await chrome.storage.local.get(NEXT_RUN_KEY);
+    const remaining = Number(nextRunAt) - Date.now();
+    if (remaining <= 0) return;
+    const seconds = Math.max(1, Math.ceil(remaining / 1000));
+    await writeStatus(`Waiting ${seconds}s before the next generation…`, 'info', {
+      countdownUntil: Number(nextRunAt),
+      countdownLabel: item?.label || '',
+    });
+    await sleep(Math.min(remaining, 1000));
+  }
+}
 
 // ── the queue ───────────────────────────────────────────────────────────────
 async function getQueue() {
@@ -217,8 +250,12 @@ async function enqueue(items) {
   if (!items?.length) return { ok: true, added: 0, skipped: 0 };
   let q = await getQueue();
   // If the previous run is fully finished, start a fresh queue so old
-  // done/failed entries don't pile up.
-  if (!q.some((i) => i.status === 'pending' || i.status === 'running')) q = [];
+  // done/failed entries don't pile up — and clear a leftover pause flag so the
+  // new batch actually runs (pausing only ever applies to its own batch).
+  if (!q.some((i) => i.status === 'pending' || i.status === 'running')) {
+    q = [];
+    await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+  }
   // Don't re-add anything already pending/running.
   const active = new Set(
     q.filter((i) => i.status === 'pending' || i.status === 'running').map(itemKey).filter(Boolean)
@@ -231,7 +268,7 @@ async function enqueue(items) {
       skipped++;
       continue;
     }
-    q.push({ ...it, id: it.id || `${Date.now()}_${_seq++}`, status: 'pending' });
+    q.push({ ...it, id: it.id || `${Date.now()}_${_seq++}`, status: 'pending', queuedAt: it.queuedAt || Date.now() });
     if (key) active.add(key);
     added++;
   }
@@ -322,15 +359,35 @@ async function processQueue() {
   if (processing) return;
   processing = true;
   try {
-    const settings = await getSettings();
+    let settings = await getSettings();
     const client = new StudioClient(settings.studioBaseUrl);
     for (;;) {
+      if (await isPaused()) {
+        await writeStatus('Queue paused — press Resume to continue.', 'info');
+        break;
+      }
+      settings = await getSettings();
       let q = await getQueue();
       const idx = q.findIndex((i) => i.status === 'pending');
       if (idx < 0) break;
-      q[idx].status = 'running';
+      const pendingId = q[idx].id;
+
+      // Human-pace gap before starting (interruptible by Pause).
+      await waitForNextRun(q[idx]);
+      if (await isPaused()) {
+        await writeStatus('Queue paused — press Resume to continue.', 'info');
+        break;
+      }
+
+      q = await getQueue();
+      const currentIdx = q.findIndex((i) => i.id === pendingId && i.status === 'pending');
+      if (currentIdx < 0) continue; // removed/cleared while we waited
+      q[currentIdx].status = 'running';
+      q[currentIdx].startedAt = Date.now();
+      delete q[currentIdx].finishedAt;
+      delete q[currentIdx].durationMs;
       await setQueue(q);
-      const item = q[idx];
+      const item = q[currentIdx];
       const pos = q.filter((i) => i.status === 'done' || i.status === 'failed').length + 1;
       await writeStatus(`(${pos}/${q.length}) ${item.label}…`, 'running');
       try {
@@ -363,22 +420,40 @@ async function processQueue() {
         if (it) {
           it.status = 'done';
           it.savedAs = r.savedAs;
+          delete it.error;
+          delete it.attempts;
+          it.finishedAt = Date.now();
+          it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
         }
         await setQueue(q);
       } catch (e) {
+        // Auto-retry (generation OR save/download failure) up to maxRetries
+        // before marking it failed — repairs a flaky download without user input.
+        const maxRetries = Math.max(0, Number(settings.maxRetries) || 0);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
+        if (it && (it.attempts || 0) < maxRetries) {
+          it.attempts = (it.attempts || 0) + 1;
+          it.status = 'pending';
+          delete it.startedAt;
+          await setQueue(q);
+          await writeStatus(`${item.label} failed — retry ${it.attempts}/${maxRetries}…`, 'running');
+          await armHumanDelay(settings);
+          continue;
+        }
         if (it) {
           it.status = 'failed';
           it.error = String(e.message || e);
+          it.finishedAt = Date.now();
+          it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
         }
         await setQueue(q);
       }
-      const more = (await getQueue()).some((i) => i.status === 'pending');
-      if (more) await sleep(politeGap());
+      // Arm the pace gap for the next item (waited out at the top of the loop).
+      if ((await getQueue()).some((i) => i.status === 'pending')) await armHumanDelay(settings);
     }
     const q = await getQueue();
-    if (q.length) {
+    if (!(await isPaused()) && q.length && !q.some((i) => i.status === 'pending' || i.status === 'running')) {
       const done = q.filter((i) => i.status === 'done').length;
       const failed = q.filter((i) => i.status === 'failed').length;
       await writeStatus(`✓ Queue finished: ${done} saved${failed ? `, ${failed} failed` : ''}.`, 'done');
@@ -397,6 +472,44 @@ async function clearQueue() {
   return { ok: true };
 }
 
+// Pause: the in-flight item finishes and saves, then the loop stops.
+async function pauseQueue() {
+  await chrome.storage.local.set({ [PAUSE_KEY]: true });
+  await writeStatus(processing ? 'Pausing — finishing the current item first…' : 'Queue paused — press Resume to continue.', 'info');
+  return { ok: true };
+}
+async function resumeQueue() {
+  await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+  alarmCreate();
+  processQueue();
+  return { ok: true };
+}
+
+// Re-pend failed items so the queue picks them up again. `id` targets one row;
+// omit it to retry every failed item.
+async function retryFailed(id = null) {
+  const q = await getQueue();
+  let retried = 0;
+  for (const it of q) {
+    if (it.status !== 'failed' || (id && it.id !== id)) continue;
+    it.status = 'pending';
+    it.attempts = 0;
+    delete it.error;
+    delete it.startedAt;
+    delete it.finishedAt;
+    delete it.durationMs;
+    retried++;
+  }
+  if (retried) {
+    await setQueue(q);
+    await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+    await writeStatus(`Retrying ${retried} failed item${retried === 1 ? '' : 's'}…`, 'running');
+    alarmCreate();
+    processQueue();
+  }
+  return { ok: true, retried };
+}
+
 // Resume after a worker restart: re-pend any item that was mid-flight when the
 // worker died, then keep going if anything is pending.
 (async () => {
@@ -408,7 +521,7 @@ async function clearQueue() {
       changed = true;
     }
   if (changed) await setQueue(q);
-  if (q.some((i) => i.status === 'pending')) {
+  if (q.some((i) => i.status === 'pending') && !(await isPaused())) {
     alarmCreate();
     processQueue();
   }
@@ -446,8 +559,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'clearQueue':
       reply(clearQueue());
       return true;
+    case 'pauseQueue':
+      reply(pauseQueue());
+      return true;
+    case 'resumeQueue':
+      reply(resumeQueue());
+      return true;
+    case 'retryFailed':
+      reply(retryFailed(msg.id || null));
+      return true;
     case 'getQueue':
-      reply(getQueue().then((queue) => ({ ok: true, queue })));
+      reply(getQueue().then(async (queue) => ({ ok: true, queue, paused: await isPaused() })));
       return true;
     case 'listVoices':
       reply(listVoices(msg.provider));

@@ -18,6 +18,8 @@ function rememberVoice(voice) {
 
 let settings;
 let client; // StudioClient (companion mode)
+let queueState = { queue: [], paused: false };
+let liveStatus = null; // last persisted status (may carry a live countdown)
 let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
 let episodesByProject = {}; // slug -> [episode objects with .status]
 let currentSections = []; // [{ slug, kind, num, label, present }] for the section list
@@ -69,34 +71,64 @@ async function init() {
   $('autoTag').checked = !!settings.autoTag;
   $('autoTag').addEventListener('change', () => persist({ autoTag: $('autoTag').checked }));
 
-  // Show the last status (a generation that's still running, or its result),
-  // and keep it live — so closing/reopening the popup doesn't lose progress.
+  // Human pace card — the gap between generations that keeps a web session from
+  // being flooded.
+  renderHumanPace();
+  $('humanPacePreset').addEventListener('change', onPacePreset);
+  $('humanPaceMin').addEventListener('change', onPaceCustom);
+  $('humanPaceMax').addEventListener('change', onPaceCustom);
+
+  // Queue controls: pause/resume, retry failed, clear pending.
+  $('pauseQueue').addEventListener('click', () =>
+    chrome.runtime.sendMessage({ type: queueState.paused ? 'resumeQueue' : 'pauseQueue' })
+  );
+  $('retryFailed').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'retryFailed' }));
+  $('clearQueue').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'clearQueue' }));
+  // Per-item remove (pending) / retry (failed) — event-delegated.
+  $('queueList').addEventListener('click', (e) => {
+    const rm = e.target.closest('.qremove');
+    if (rm) return void chrome.runtime.sendMessage({ type: 'removeItem', id: rm.dataset.id });
+    const rt = e.target.closest('.qretry');
+    if (rt) return void chrome.runtime.sendMessage({ type: 'retryFailed', id: rt.dataset.id });
+  });
+
+  // Load the current queue + paused state, then keep it live via storage events.
+  const qs = await chrome.runtime.sendMessage({ type: 'getQueue' });
+  queueState = { queue: qs?.queue || [], paused: !!qs?.paused };
+  renderQueueUI();
   const { lastStatus } = await chrome.storage.local.get('lastStatus');
-  if (lastStatus && Date.now() - lastStatus.ts < 30 * 60 * 1000) status(lastStatus.text);
-  const { queue } = await chrome.storage.local.get('queue');
-  renderQueueBar(queue || []);
-  renderQueueList(queue || []);
-  $('clearQueue').addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ type: 'clearQueue' });
-  });
-  // Remove a single pending item (event-delegated).
-  $('queueList').addEventListener('click', async (e) => {
-    const btn = e.target.closest('.qremove');
-    if (btn) await chrome.runtime.sendMessage({ type: 'removeItem', id: btn.dataset.id });
-  });
+  if (lastStatus && Date.now() - lastStatus.ts < 30 * 60 * 1000) {
+    liveStatus = lastStatus;
+    applyLiveStatus();
+  }
+  setInterval(tickCountdown, 1000); // ticks the "Waiting Ns…" countdown
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.lastStatus) status(changes.lastStatus.newValue?.text || '');
-    if (changes.queue) onQueueChanged(changes.queue.oldValue || [], changes.queue.newValue || []);
+    if (changes.lastStatus) {
+      liveStatus = changes.lastStatus.newValue || null;
+      applyLiveStatus();
+    }
+    if (changes.queuePaused) {
+      queueState.paused = !!changes.queuePaused.newValue;
+      renderQueueUI();
+    }
+    if (changes.queue) {
+      const oldQ = changes.queue.oldValue || [];
+      queueState.queue = changes.queue.newValue || [];
+      onQueueChanged(oldQ, queueState.queue);
+    }
   });
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
     $('generate').hidden = true; // companion uses the multi-select "Queue selected"
     $('queueSelected').hidden = false;
+    $('queueEpisode').hidden = false;
     $('queueProject').hidden = false;
     $('queueSelected').addEventListener('click', onQueueSelected);
+    $('queueEpisode').addEventListener('click', onQueueEpisode);
     $('queueProject').addEventListener('click', onQueueProject);
+    $('reloadSections').addEventListener('click', onReloadSections);
     $('testConn').addEventListener('click', testConnection);
     $('selectAll').addEventListener('change', (e) => {
       $('sectionList')
@@ -124,6 +156,7 @@ async function init() {
   } else {
     $('pastePane').hidden = false;
     $('queueSelected').hidden = true;
+    $('queueEpisode').hidden = true;
     $('queueProject').hidden = true;
     ['pasteCode', 'pasteLabel', 'pasteText'].forEach((id) =>
       $(id).addEventListener('input', updatePreview)
@@ -559,57 +592,186 @@ async function onQueueProject() {
   );
 }
 
-function renderQueueBar(queue) {
+// Queue every missing section (intro + chapters) of just the CURRENT episode.
+async function onQueueEpisode() {
+  const voice = $('voice').value;
+  if (!voice) return status('Pick a voice first (↻ to load).');
+  if (!ctx.projectSlug || !ctx.episodeCode) return status('Pick an episode first.');
+  const missing = currentSections.filter((s) => !s.present);
+  if (!missing.length) return status('This episode already has all its audio. 🎉');
+  const ok = await confirmDialog(
+    `Queue all ${missing.length} missing section${missing.length > 1 ? 's' : ''} of ${ctx.episodeCode}?`,
+    `Generates with ${currentProvider()} — ${costPhrase()}.`,
+    'Queue'
+  );
+  if (!ok) return;
+  persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
+  const items = missing.map(itemFromSection);
+  const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
+  status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
+}
+
+// Re-pull the current project's episodes + the open episode's chapters/audio
+// status from Story Studio (drops the 5-min cache) — "load script/audio".
+async function onReloadSections() {
+  if (settings.mode !== 'companion') return;
+  if (!ctx.projectSlug) return status('Pick a project first.');
+  await invalidateEpisodes(ctx.projectSlug);
+  await loadEpisodes();
+}
+
+// ── Human pace (gap between generations) ─────────────────────────────────────
+const HUMAN_PACE_PRESETS = {
+  off: { min: 0, max: 0 },
+  quick: { min: 2, max: 5 },
+  balanced: { min: 5, max: 12 },
+  cautious: { min: 15, max: 40 },
+};
+function paceValues() {
+  const a = Math.max(0, Number(settings?.humanDelayMinSec) || 0);
+  const b = Math.max(0, Number(settings?.humanDelayMaxSec) || 0);
+  return { min: Math.min(a, b), max: Math.max(a, b) };
+}
+function pacePresetKey(min, max) {
+  return Object.entries(HUMAN_PACE_PRESETS).find(([, p]) => p.min === min && p.max === max)?.[0] || 'custom';
+}
+function renderHumanPace() {
+  const { min, max } = paceValues();
+  const key = pacePresetKey(min, max);
+  $('humanPacePreset').value = key;
+  $('humanPaceCustom').hidden = key !== 'custom';
+  $('humanPaceMin').value = String(min);
+  $('humanPaceMax').value = String(max);
+  const off = min === 0 && max === 0;
+  const st = $('humanPaceState');
+  st.textContent = off ? 'No delay' : min === max ? `${min}s` : `${min}–${max}s`;
+  st.classList.toggle('off', off);
+}
+async function onPacePreset() {
+  const key = $('humanPacePreset').value;
+  if (key === 'custom') {
+    $('humanPaceCustom').hidden = false;
+    $('humanPaceMin').focus();
+    return;
+  }
+  const p = HUMAN_PACE_PRESETS[key];
+  if (!p) return;
+  await persist({ humanDelayMinSec: p.min, humanDelayMaxSec: p.max });
+  renderHumanPace();
+}
+async function onPaceCustom() {
+  const min = Math.max(0, Math.min(3600, Math.round(Number($('humanPaceMin').value) || 0)));
+  const max = Math.max(min, Math.min(3600, Math.round(Number($('humanPaceMax').value) || 0)));
+  await persist({ humanDelayMinSec: min, humanDelayMaxSec: max });
+  renderHumanPace();
+}
+
+// ── Queue view (status bar + controls + list) ────────────────────────────────
+const Q_GLYPH = { pending: '•', running: '⟳', done: '✓', failed: '✗' };
+
+function renderQueueUI() {
+  const { queue, paused } = queueState;
+  updateGenStatus(queue, paused);
+  renderQueueControls(queue, paused);
+  renderQueueList(queue);
+}
+
+// Prominent Idle / Queued / Generating / Paused / Finished bar with counts.
+function updateGenStatus(queue, paused) {
+  const done = queue.filter((i) => i.status === 'done').length;
+  const failed = queue.filter((i) => i.status === 'failed').length;
+  const left = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
+  const running = queue.some((i) => i.status === 'running');
+  let state = 'Idle';
+  let cls = 'idle';
+  if (paused && left > 0) {
+    state = 'Paused';
+    cls = 'paused';
+  } else if (left > 0) {
+    state = running ? 'Generating' : 'Queued';
+    cls = 'running';
+  } else if (queue.length) {
+    state = 'Finished';
+    cls = 'done';
+  }
+  $('genStatusBar').className = 'genstatus ' + cls;
+  $('gsStateText').textContent = state;
+  $('gsDone').textContent = `${done} done`;
+  $('gsFailed').textContent = `${failed} failed`;
+  $('gsLeft').textContent = `${left} left`;
+  $('gsCounts').hidden = queue.length === 0;
+}
+
+function renderQueueControls(queue, paused) {
   const active = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
   const done = queue.filter((i) => i.status === 'done').length;
   const failed = queue.filter((i) => i.status === 'failed').length;
-  if (!queue.length) {
-    $('queueBar').hidden = true;
-    return;
-  }
-  $('queueBar').hidden = false;
+  $('queueControls').hidden = queue.length === 0;
   const parts = [];
   if (active) parts.push(`${active} queued`);
   if (done) parts.push(`${done} done`);
   if (failed) parts.push(`${failed} failed`);
-  $('queueInfo').textContent = `Queue: ${parts.join(' · ') || 'empty'}`;
+  $('queueInfo').textContent = parts.length ? `Queue: ${parts.join(' · ')}` : '';
+  const pause = $('pauseQueue');
+  pause.hidden = active === 0; // pause/resume only matters while there's work
+  pause.textContent = paused ? 'Resume' : 'Pause';
+  $('retryFailed').hidden = failed === 0;
 }
-
-const Q_GLYPH = { pending: '•', running: '⟳', done: '✓', failed: '✗' };
 
 function renderQueueList(queue) {
   const ul = $('queueList');
   ul.innerHTML = '';
-  if (!queue.length) {
-    ul.hidden = true;
-    return;
-  }
-  ul.hidden = false;
+  ul.hidden = queue.length === 0;
   for (const it of queue) {
     const li = document.createElement('li');
     li.className = `qrow q-${it.status}`;
     const label = document.createElement('span');
     label.className = 'qlabel';
-    label.textContent = `${Q_GLYPH[it.status] || '•'} ${it.label}`;
+    label.textContent = `${Q_GLYPH[it.status] || '•'} ${it.label}${it.savedAs ? ` → ${it.savedAs}` : ''}`;
     if (it.status === 'failed' && it.error) label.title = it.error;
     li.appendChild(label);
+    const actions = document.createElement('div');
+    actions.className = 'qactions';
     if (it.status === 'pending') {
       const x = document.createElement('button');
       x.className = 'qremove';
       x.textContent = '✕';
       x.title = 'Remove from queue';
       x.dataset.id = it.id;
-      li.appendChild(x);
+      actions.appendChild(x);
+    } else if (it.status === 'failed') {
+      const r = document.createElement('button');
+      r.className = 'qretry';
+      r.textContent = '↻';
+      r.title = it.error ? `Retry — ${it.error}` : 'Retry this item';
+      r.dataset.id = it.id;
+      actions.appendChild(r);
     }
+    li.appendChild(actions);
     ul.appendChild(li);
   }
 }
 
+// ── Live status + countdown ──────────────────────────────────────────────────
+// Non-countdown status text is shown as-is; a countdown is ticked each second.
+function applyLiveStatus() {
+  if (!liveStatus) return status('');
+  if (Number.isFinite(liveStatus.countdownUntil)) tickCountdown();
+  else status(liveStatus.text || '');
+}
+function tickCountdown() {
+  if (!liveStatus || !Number.isFinite(liveStatus.countdownUntil)) return;
+  // Only tick while there's actually work in flight — otherwise a countdown left
+  // over from a killed worker would stick on "Starting…".
+  if (!queueState.queue.some((i) => i.status === 'pending' || i.status === 'running')) return;
+  const secs = Math.max(0, Math.ceil((liveStatus.countdownUntil - Date.now()) / 1000));
+  status(secs > 0 ? `Waiting ${secs}s before the next generation…` : 'Starting…');
+}
+
 // When the whole queue finishes, refresh the current episode's section list so
-// the ones we just made drop off.
+// the ones we just made drop off; always keep the queue UI current.
 async function onQueueChanged(oldQ, newQ) {
-  renderQueueBar(newQ);
-  renderQueueList(newQ);
+  renderQueueUI();
   const active = newQ.some((i) => i.status === 'pending' || i.status === 'running');
   const wasActive = oldQ.some((i) => i.status === 'pending' || i.status === 'running');
   if (wasActive && !active && settings.mode === 'companion' && ctx.episodeCode) {

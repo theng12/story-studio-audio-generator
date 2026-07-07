@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 — Human pacing + full queue controls
+
+Queue quality-of-life, adapted from the sibling Bulk Asset extension:
+
+- **Human pace.** A configurable, randomised gap between generations so a web
+  session (fish.audio / ElevenLabs) is never flooded — presets **Off / Quick
+  (2–5s) / Balanced (5–12s) / Cautious (15–40s)** or a custom min–max. The gap
+  is waited out with a live "Waiting Ns…" countdown and is interruptible.
+- **Live queue status bar.** A prominent **Idle / Queued / Generating / Paused /
+  Finished** indicator (green + glowing while generating, amber while paused)
+  with running **done / failed / left** counts.
+- **Pause & Resume.** Pause lets the current item finish and save, then stops;
+  Resume picks straight back up.
+- **Auto-retry / repair.** A failed generation or download is retried
+  automatically (once by default) before it's marked failed — and every failed
+  row keeps a **↻ retry** button, with a **Retry failed** action to re-run them
+  all at once.
+- **Clear pending.** Drops everything not yet started; the in-flight item
+  finishes on its own.
+- **Load / Reload script + audio.** A **⟳ Reload** button re-pulls the project's
+  episodes and the open episode's chapters + audio status from Story Studio
+  (dropping the cache), so you can refresh after editing scripts or saving audio.
+- **Queue this episode's audio** — a one-click button to queue every missing
+  section (intro + chapters) of the current episode, alongside **Queue selected**
+  and **Queue all pending (whole project)**.
+
 ## 0.4.0 — Provider open-button, version badge, What's new
 
 More UX parity with the sibling Bulk Asset extension:

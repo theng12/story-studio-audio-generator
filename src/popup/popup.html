@@ -62,7 +62,10 @@
 
       <div class="row between section-head">
         <span class="muted" id="sectionsSummary">Chapters / Intro</span>
-        <label class="check"><input type="checkbox" id="selectAll" /> all</label>
+        <div class="hgroup">
+          <button id="reloadSections" class="link small" title="Re-pull chapters + audio status from Story Studio">⟳ Reload</button>
+          <label class="check"><input type="checkbox" id="selectAll" /> all</label>
+        </div>
       </div>
       <div id="sectionList" class="sectionlist"></div>
     </section>
@@ -105,11 +108,48 @@
 
     <button id="generate" class="primary">Generate &amp; save</button>
     <button id="queueSelected" class="primary" hidden>Queue selected</button>
-    <button id="queueProject" hidden>Queue whole project</button>
+    <button id="queueEpisode" hidden>Queue this episode's audio</button>
+    <button id="queueProject" hidden>Queue all pending (whole project)</button>
 
-    <div id="queueBar" class="queuebar" hidden>
-      <span id="queueInfo"></span>
-      <button id="clearQueue" class="link">clear pending</button>
+    <!-- Human pace — a randomised gap between generations so a web session
+         (fish.audio / ElevenLabs) is never flooded -->
+    <section class="pace-card">
+      <div class="row between">
+        <span class="muted small">Human pace <span class="muted">· gap between generations</span></span>
+        <span id="humanPaceState" class="pace-state" aria-live="polite"></span>
+      </div>
+      <select id="humanPacePreset">
+        <option value="off">Off (no delay)</option>
+        <option value="quick">Quick (2–5s)</option>
+        <option value="balanced">Balanced (5–12s) — recommended</option>
+        <option value="cautious">Cautious (15–40s)</option>
+        <option value="custom">Custom</option>
+      </select>
+      <div id="humanPaceCustom" class="row pace-custom" hidden>
+        <label class="grow"><span class="mini">Min seconds</span>
+          <input id="humanPaceMin" type="number" min="0" max="3600" step="1" /></label>
+        <label class="grow"><span class="mini">Max seconds</span>
+          <input id="humanPaceMax" type="number" min="0" max="3600" step="1" /></label>
+      </div>
+    </section>
+
+    <!-- Live queue status: Idle / Queued / Generating / Paused / Finished -->
+    <div id="genStatusBar" class="genstatus idle">
+      <span class="gs-state"><span class="gs-dot"></span><span id="gsStateText">Idle</span></span>
+      <span id="gsCounts" class="gs-counts" hidden>
+        <span class="gs-done" id="gsDone">0 done</span>
+        <span class="gs-failed" id="gsFailed">0 failed</span>
+        <span class="gs-left" id="gsLeft">0 left</span>
+      </span>
+    </div>
+
+    <div id="queueControls" class="row between queue-controls" hidden>
+      <span id="queueInfo" class="muted small"></span>
+      <div class="hgroup">
+        <button id="pauseQueue" class="link small" hidden>Pause</button>
+        <button id="retryFailed" class="link small" hidden>Retry failed</button>
+        <button id="clearQueue" class="link small">Clear pending</button>
+      </div>
     </div>
     <ul id="queueList" class="queuelist" hidden></ul>
 

@@ -51,6 +51,15 @@ export const DEFAULTS = {
   // Last-used selections, restored when the popup reopens.
   lastProject: '',
   lastEpisode: '',
+  // Human pacing — a randomised gap between generations so a web session
+  // (fish.audio / ElevenLabs) is never flooded. Seconds; the panel's "Human
+  // pace" presets set these two. Default ≈ the old fixed 5–12s gap.
+  humanDelayMinSec: 5,
+  humanDelayMaxSec: 12,
+  // Auto-retry a failed generation/download this many times before giving up
+  // and marking it failed (0 = off). The manual "Retry failed" button always
+  // works regardless of this.
+  maxRetries: 1,
 };
 
 const STORAGE_KEY = 'settings';
