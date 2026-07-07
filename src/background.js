@@ -57,7 +57,34 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // ── web-session provider tab plumbing ───────────────────────────────────────
+// Find an already-open, ready tab for the provider WITHOUT opening one. Passive
+// actions (loading voices) use this so switching provider never pops a page
+// open on its own — the panel's "Open provider" button is the explicit way in.
+async function findProviderTab(p) {
+  const tabs = await chrome.tabs.query({ url: p.origin });
+  return tabs.find((t) => t.status === 'complete') || tabs[0] || null;
+}
+
+// Focus the provider's tab, or open it — only ever from the panel's explicit
+// "↗ Open provider" button (never as a side effect of switching provider).
+async function openProviderPage(providerId) {
+  const p = PROVIDERS[providerId];
+  if (!p || p.type !== 'webSession') {
+    return { ok: false, error: 'This provider needs no page — it calls the API directly with your key.' };
+  }
+  const tabs = await chrome.tabs.query({ url: p.origin });
+  if (tabs[0]) {
+    await chrome.tabs.update(tabs[0].id, { active: true });
+    await chrome.windows.update(tabs[0].windowId, { focused: true }).catch(() => {});
+    return { ok: true, opened: false };
+  }
+  await chrome.tabs.create({ url: p.appUrl, active: true });
+  return { ok: true, opened: true };
+}
+
 // Find a ready tab on the provider's site, or open its app page and wait.
+// Used only when a queued generation actually needs the tab (opens in the
+// background so "queue and walk away" still works unattended).
 async function ensureProviderTab(p) {
   const tabs = await chrome.tabs.query({ url: p.origin });
   const ready = tabs.find((t) => t.status === 'complete');
@@ -394,7 +421,9 @@ chrome.alarms?.onAlarm?.addListener((a) => {
 async function listVoices(providerId) {
   const p = PROVIDERS[providerId] || PROVIDERS.fish;
   if (p.type === 'webSession') {
-    const tab = await ensureProviderTab(p);
+    // Use an already-open tab; never open one just to read the voice list.
+    const tab = await findProviderTab(p);
+    if (!tab) throw new Error(`Open the ${p.name} page first (↗ Open ${p.name}), then load voices.`);
     const { voices } = await send(tab.id, { type: `${p.msg}:listVoices` });
     return { ok: true, voices };
   }
@@ -422,6 +451,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     case 'listVoices':
       reply(listVoices(msg.provider));
+      return true;
+    case 'openProviderPage':
+      reply(openProviderPage(msg.provider));
       return true;
     default:
       return false;

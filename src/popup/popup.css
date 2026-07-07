@@ -57,6 +57,22 @@ header {
   margin-bottom: 10px;
 }
 h1 { font-size: 14px; margin: 0; }
+.header-brand { display: flex; align-items: center; gap: 7px; }
+.header-actions { display: flex; align-items: center; gap: 4px; }
+.version-badge {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.whats-new { position: relative; font-size: 12px; color: var(--link); white-space: nowrap; }
+.ndot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); margin-left: 3px; vertical-align: top; }
+.open-provider-row { margin-top: 4px; }
+#openProviderPage { color: var(--link); font-size: 12px; }
 a { color: var(--link); }
 label {
   display: block;
@@ -182,7 +198,16 @@ label.check input { width: auto; margin: 0; }
   border-radius: 12px; padding: 14px; width: 100%; max-width: 320px;
   box-shadow: 0 10px 30px var(--dialog-shadow);
 }
+.dialog.wide { max-width: 420px; }
 .dlgtitle { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
 .dialog .muted { font-size: 12px; }
+
+/* What's new / changelog */
+.changelog { max-height: 62vh; overflow-y: auto; margin-top: 8px; font-size: 13px; }
+.changelog h3.cl-ver { color: var(--fg); font-size: 13px; font-weight: 600; margin: 14px 0 4px; }
+.changelog h3.cl-ver:first-child { margin-top: 2px; }
+.changelog .cl-item { color: var(--muted); padding-left: 4px; margin: 3px 0; line-height: 1.35; }
+.changelog p { color: var(--muted); margin: 4px 0; }
+.changelog code { background: var(--surface); padding: 0 4px; border-radius: 3px; }
 .dialog .primary { width: auto; margin: 0; padding: 7px 14px; }
 .dialog button { padding: 7px 12px; }

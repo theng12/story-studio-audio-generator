@@ -16,8 +16,14 @@
   </head>
   <body>
     <header>
-      <h1>Story Studio TTS</h1>
-      <button id="openOptions" class="link settings-gear" title="Open settings" aria-label="Open settings">⚙</button>
+      <div class="header-brand">
+        <h1>Story Studio TTS</h1>
+        <span id="extensionVersion" class="version-badge" title="Installed extension version"></span>
+      </div>
+      <div class="header-actions">
+        <button id="whatsNew" class="link small whats-new" title="What changed recently">✨ What's new<span id="whatsNewDot" class="ndot" hidden></span></button>
+        <button id="openOptions" class="link settings-gear" title="Open settings" aria-label="Open settings">⚙</button>
+      </div>
     </header>
 
     <label>Provider
@@ -29,6 +35,9 @@
       </select>
     </label>
     <p id="providerNote" class="muted"></p>
+    <div class="row end open-provider-row">
+      <button id="openProviderPage" class="link small" title="Open this provider's page in a tab" hidden>↗ Open provider</button>
+    </div>
 
     <!-- Companion mode: pick from a running Story Studio server -->
     <section id="companionPane" hidden>
@@ -105,6 +114,17 @@
     <ul id="queueList" class="queuelist" hidden></ul>
 
     <p id="status" class="muted"></p>
+
+    <!-- What's new — renders CHANGELOG.md packaged with the extension -->
+    <div id="whatsNewModal" class="overlay" hidden>
+      <div class="dialog wide">
+        <div class="row between">
+          <div class="dlgtitle">What's new</div>
+          <button id="whatsNewClose" class="link" aria-label="Close">✕</button>
+        </div>
+        <div id="whatsNewBody" class="changelog"></div>
+      </div>
+    </div>
 
     <!-- Styled confirmation (replaces the native confirm popup) -->
     <div id="confirm" class="overlay" hidden>

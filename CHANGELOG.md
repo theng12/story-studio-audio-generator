@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 — Provider open-button, version badge, What's new
+
+More UX parity with the sibling Bulk Asset extension:
+
+- **No more surprise tabs when switching provider.** Selecting fish.audio or
+  ElevenLabs (web) no longer pops their page open on its own. Loading voices now
+  uses an already-open tab; if none is open you get a clear prompt instead.
+- **"↗ Open provider" button.** A manual shortcut (shown only for the
+  web-session providers) opens or focuses the provider's page when *you* want it
+  — the extension never does it behind your back. Queued generations still open
+  the tab in the background so unattended runs finish.
+- **Version badge** next to the title, showing the installed extension version.
+- **"✨ What's new" button** — renders this changelog in a panel, with a red dot
+  until you've read the current version's notes.
+- **Episode audio progress at a glance.** In companion mode the episode dropdown
+  now annotates each episode with `· done/total ✓`, so you can see which
+  episodes are fully voiced and which still need audio without opening each.
+
 ## 0.3.0 — Multi-select, in-panel test, auto-save, styled dialogs
 
 Four UX features adapted from the sibling Flow extension:

@@ -31,8 +31,13 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   await initTheme();
+  const manifest = chrome.runtime.getManifest();
+  $('extensionVersion').textContent = `v${manifest.version}`;
+  $('extensionVersion').title = `${manifest.name} v${manifest.version}`;
+  initWhatsNew(manifest.version);
   settings = await getSettings();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('openProviderPage').addEventListener('click', onOpenProviderPage);
   $('generate').addEventListener('click', onGenerate);
   $('loadVoices').addEventListener('click', loadVoices);
   await initVoices();
@@ -145,10 +150,69 @@ const PROVIDER_NOTE = {
   elevenlabs: 'Uses your ElevenLabs quota — free tier gives 10k chars/month. Needs your API key in Settings.',
   openai: '💲 Paid — OpenAI TTS bills your OpenAI account per use (no free tier).',
 };
+// Which providers drive a logged-in web tab (vs. calling an API with a key).
+const WEB_PROVIDER = { fish: 'fish.audio', elevenlabs_web: 'elevenlabs.io' };
 function applyProviderUI() {
   const p = currentProvider();
   $('autoTagLabel').hidden = p !== 'fish';
   $('providerNote').textContent = PROVIDER_NOTE[p] || '';
+  // Web-session providers need their page open; offer a manual "open" shortcut
+  // rather than the extension popping the page open when you switch providers.
+  const site = WEB_PROVIDER[p];
+  const openBtn = $('openProviderPage');
+  openBtn.hidden = !site;
+  if (site) openBtn.textContent = `↗ Open ${site}`;
+}
+
+// Open (or focus) the current provider's page — the only place the extension
+// opens a provider tab in response to the user, not as a side effect.
+async function onOpenProviderPage() {
+  const r = await chrome.runtime.sendMessage({ type: 'openProviderPage', provider: currentProvider() });
+  if (!r?.ok) status(r?.error || NORESP);
+}
+
+// ── What's new (changelog) ──────────────────────────────────────────────────
+// Renders CHANGELOG.md (packaged with the extension) in the modal, and shows a
+// red dot on the button until the current version's notes have been opened.
+function renderChangelog(md) {
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>');
+  return md
+    .split('\n')
+    .map((line) => {
+      if (/^#\s/.test(line)) return ''; // top-level title — modal already titled
+      if (/^##\s/.test(line)) return `<h3 class="cl-ver">${inline(line.replace(/^##\s+/, ''))}</h3>`;
+      if (/^\s*-\s/.test(line)) return `<div class="cl-item">• ${inline(line.replace(/^\s*-\s+/, ''))}</div>`;
+      if (/^\s*$/.test(line)) return '';
+      return `<p>${inline(line)}</p>`;
+    })
+    .join('');
+}
+
+async function openWhatsNew(version) {
+  const body = $('whatsNewBody');
+  if (!body.dataset.loaded) {
+    try {
+      const md = await (await fetch(chrome.runtime.getURL('CHANGELOG.md'))).text();
+      body.innerHTML = renderChangelog(md);
+      body.dataset.loaded = '1';
+    } catch {
+      body.textContent = "Couldn't load the changelog.";
+    }
+  }
+  $('whatsNewModal').hidden = false;
+  $('whatsNewDot').hidden = true;
+  chrome.storage.local.set({ whatsNewSeen: version });
+}
+
+async function initWhatsNew(version) {
+  const { whatsNewSeen } = await chrome.storage.local.get('whatsNewSeen');
+  $('whatsNewDot').hidden = whatsNewSeen === version;
+  $('whatsNew').onclick = () => openWhatsNew(version);
+  $('whatsNewClose').onclick = () => ($('whatsNewModal').hidden = true);
+  $('whatsNewModal').onclick = (e) => {
+    if (e.target === $('whatsNewModal')) $('whatsNewModal').hidden = true;
+  };
 }
 
 // How this provider charges — used in the queue confirmation dialogs.
@@ -273,11 +337,39 @@ async function loadEpisodes() {
   };
   if (eps.length) {
     status('');
+    fetchEpisodeAudioCounts(slug, eps); // lazily annotate each option with done/total
     await loadSections();
   } else {
     currentSections = [];
     renderSections();
     status('No episodes in this project need audio. 🎉');
+  }
+}
+
+// Lazily append each episode's audio progress (`· done/total ✓`) to its dropdown
+// label, so you can see which episodes are fully voiced without opening each.
+// Throttled + abortable — a new project/episode reload bumps the run token.
+let epCountRun = 0;
+async function fetchEpisodeAudioCounts(slug, eps) {
+  const run = ++epCountRun;
+  const sel = $('episode');
+  for (const ep of eps) {
+    if (run !== epCountRun) return;
+    const code = ep.episode_code || ep.code || '';
+    const opt = [...sel.options].find((o) => o.value === code);
+    if (!opt) continue;
+    try {
+      const a = await client.audioStatus(slug, code);
+      const total = a.total ?? (a.present ?? 0) + (a.missing ?? (a.missing_files || []).length);
+      const done = a.present ?? Math.max(0, total - (a.missing ?? (a.missing_files || []).length));
+      if (total) {
+        const base = `${code} ${opt.dataset.title || ''}`.trim();
+        opt.textContent = `${base} · ${done}/${total}${done >= total ? ' ✓' : ''}`;
+      }
+    } catch {
+      /* episode without an audio manifest yet — leave the plain label */
+    }
+    await new Promise((r) => setTimeout(r, 120));
   }
 }
 
