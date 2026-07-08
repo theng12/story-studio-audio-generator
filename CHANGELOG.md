@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 — Cooldown on a credit/quota limit (stop spamming a limited provider)
+
+Previously, if a provider ran out of credits mid-queue, every remaining item
+still tried it — each one paced out but ultimately hitting the same dead end
+until the whole queue burned through as "failed". Fixed:
+
+- **Limit detection.** All four providers now recognize a credit/quota/
+  rate-limit response (fish.audio, ElevenLabs web + API key, OpenAI) instead of
+  treating it like any other failure.
+- **New "Provider cooldown" card** in the side panel (next to Human pace),
+  scoped to whichever provider is selected. **Off by default** (unchanged
+  behavior): a detected limit hard-pauses the whole queue and the limited item
+  is put back to pending — press **Resume** yourself once it resets. Turn
+  **auto-resume** on to instead have the queue wait a chosen time (15 min –
+  24 h, or custom) and retry that provider on its own — self-correcting: if
+  it's still limited, the wait re-arms.
+- The status bar gains a distinct **Cooldown** state (blue) separate from a
+  manual **Paused** (orange), naming which provider is waiting and counting
+  down live. Manually pressing Resume always overrides a cooldown immediately.
+- Ordinary (non-quota) failures are unaffected — they keep auto-retrying via
+  the existing retry setting exactly as before.
+
 ## 0.6.1 — ElevenLabs 5000-char chunking
 
 - All three ElevenLabs models share the same **5000-character per-request cap**

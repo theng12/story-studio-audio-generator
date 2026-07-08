@@ -64,6 +64,19 @@ export const DEFAULTS = {
   // from PROVIDER_SETTING_DEFAULTS via getProviderSettings(); only the keys the
   // user changes are stored here. ElevenLabs is model-aware (see providers.js).
   providerSettings: {},
+  // Per-provider auto-resume on a detected limit/quota error (a generation that
+  // comes back with `.limit` — see providers.js / the content scripts). Default
+  // OFF everywhere: a limit hit hard-pauses the queue (press Resume yourself),
+  // same as today. Switch a provider on to instead wait `minutes` and resume
+  // automatically — self-correcting: if it's still limited, the next attempt
+  // re-arms the cooldown. This is separate from `maxRetries` (generic,
+  // non-quota failures keep retrying exactly as before regardless of this).
+  providerCooldowns: {
+    fish: { autoResume: false, minutes: 15 },
+    elevenlabs_web: { autoResume: false, minutes: 60 },
+    elevenlabs: { autoResume: false, minutes: 60 },
+    openai: { autoResume: false, minutes: 60 },
+  },
 };
 
 // Defaults for the per-provider tuning controls. ElevenLabs (web + API key)
@@ -82,6 +95,14 @@ export function getProviderSettings(settings, providerId) {
     ...(PROVIDER_SETTING_DEFAULTS[providerId] || {}),
     ...((settings.providerSettings || {})[providerId] || {}),
   };
+}
+
+// A provider's cooldown/auto-resume config — { autoResume, minutes }.
+export function providerCooldown(settings, providerId) {
+  return (
+    settings?.providerCooldowns?.[providerId] ||
+    DEFAULTS.providerCooldowns[providerId] || { autoResume: false, minutes: 15 }
+  );
 }
 
 const STORAGE_KEY = 'settings';

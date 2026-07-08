@@ -111,7 +111,14 @@
         headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
         body: JSON.stringify(body),
       });
-      if (!r.ok) throw new Error(`ElevenLabs ${r.status}: ${(await r.text()).slice(0, 160)}`);
+      if (!r.ok) {
+        const bodyText = await r.text().catch(() => '');
+        // ElevenLabs returns quota_exceeded as HTTP 401 (same code as a bad key),
+        // so distinguish it by body text rather than status alone.
+        const limit =
+          r.status === 429 || /quota_exceeded|insufficient|out of credits|too many requests|rate.?limit/i.test(bodyText);
+        throw Object.assign(new Error(`ElevenLabs ${r.status}: ${bodyText.slice(0, 160)}`), { limit });
+      }
       buffers.push(await r.arrayBuffer());
     }
     const total = buffers.reduce((n, b) => n + b.byteLength, 0);
@@ -132,7 +139,7 @@
       const result = await fn(d.payload || {});
       window.postMessage({ kind: RES, id: d.id, ok: true, result }, '*');
     } catch (e) {
-      window.postMessage({ kind: RES, id: d.id, ok: false, error: String(e.message || e) }, '*');
+      window.postMessage({ kind: RES, id: d.id, ok: false, error: String(e.message || e), limit: !!e.limit }, '*');
     }
   });
 })();

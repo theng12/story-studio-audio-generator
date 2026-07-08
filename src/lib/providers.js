@@ -166,7 +166,14 @@ async function elevenGenerateChunk(text, voice, key, model, voiceSettings) {
       body: JSON.stringify({ text, model_id: model, voice_settings: voiceSettings }),
     }
   );
-  if (!r.ok) throw new Error(`ElevenLabs ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  if (!r.ok) {
+    const bodyText = await r.text().catch(() => '');
+    // ElevenLabs returns quota_exceeded as HTTP 401 (same code as a bad key), so
+    // distinguish it by body text rather than status alone.
+    const limit =
+      r.status === 429 || /quota_exceeded|insufficient|out of credits|too many requests|rate.?limit/i.test(bodyText);
+    throw Object.assign(new Error(`ElevenLabs ${r.status}: ${bodyText.slice(0, 160)}`), { limit });
+  }
   return r.arrayBuffer();
 }
 
@@ -176,7 +183,11 @@ async function openaiGenerateChunk(text, voice, key, model, speed) {
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, voice, input: text, response_format: 'mp3', speed: clamp(speed, 0.25, 4, 1) }),
   });
-  if (!r.ok) throw new Error(`OpenAI ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  if (!r.ok) {
+    const bodyText = await r.text().catch(() => '');
+    const limit = r.status === 429 || /insufficient_quota|quota|rate.?limit|billing/i.test(bodyText);
+    throw Object.assign(new Error(`OpenAI ${r.status}: ${bodyText.slice(0, 160)}`), { limit });
+  }
   return r.arrayBuffer();
 }
 

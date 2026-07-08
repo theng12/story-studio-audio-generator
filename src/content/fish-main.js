@@ -82,14 +82,21 @@
       body: JSON.stringify(body),
     });
     if (!r.ok) {
+      const bodyText = await r.text().catch(() => '');
       let msg = `Generation failed (${r.status}).`;
       try {
-        const j = await r.json();
+        const j = JSON.parse(bodyText);
         if (j?.message) msg = j.message;
       } catch {
-        /* binary/empty body */
+        /* binary/empty/non-JSON body */
       }
-      throw new Error(msg);
+      // A credit/balance/rate-limit failure — surfaced as .limit so the queue
+      // can pause or auto-resume instead of burning through every remaining item.
+      const limit =
+        r.status === 402 ||
+        r.status === 429 ||
+        /insufficient|balance|credit|quota|too many requests|rate.?limit/i.test(`${msg} ${bodyText}`);
+      throw Object.assign(new Error(msg), { limit });
     }
     const buf = await r.arrayBuffer();
     if (!buf.byteLength) throw new Error('Empty audio returned.');
@@ -119,7 +126,7 @@
       const result = await fn(payload || {});
       window.postMessage({ kind: RES, id, ok: true, result }, '*');
     } catch (e) {
-      window.postMessage({ kind: RES, id, ok: false, error: String(e.message || e) }, '*');
+      window.postMessage({ kind: RES, id, ok: false, error: String(e.message || e), limit: !!e.limit }, '*');
     }
   });
 })();

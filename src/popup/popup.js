@@ -1,4 +1,4 @@
-import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDER_SETTING_DEFAULTS } from '../lib/config.js';
+import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDER_SETTING_DEFAULTS, providerCooldown } from '../lib/config.js';
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { buildDownloadPath } from '../lib/naming.js';
@@ -64,10 +64,12 @@ async function init() {
   applyProviderUI();
   wireVoiceSettings();
   renderVoiceSettings();
+  renderCooldownCard();
   $('provider').addEventListener('change', async () => {
     await persist({ provider: currentProvider() });
     applyProviderUI();
     renderVoiceSettings();
+    renderCooldownCard();
     await initVoices();
   });
 
@@ -82,9 +84,15 @@ async function init() {
   $('humanPaceMin').addEventListener('change', onPaceCustom);
   $('humanPaceMax').addEventListener('change', onPaceCustom);
 
-  // Queue controls: pause/resume, retry failed, clear pending.
+  // Provider cooldown card — what happens when a limit is detected.
+  $('cooldownAutoResume').addEventListener('change', onCooldownToggle);
+  $('cooldownPreset').addEventListener('change', onCooldownPreset);
+  $('cooldownMinutes').addEventListener('change', saveCooldownCustom);
+
+  // Queue controls: pause/resume, retry failed, clear pending. Resume also
+  // overrides an active cooldown (the background clears it on manual resume).
   $('pauseQueue').addEventListener('click', () =>
-    chrome.runtime.sendMessage({ type: queueState.paused ? 'resumeQueue' : 'pauseQueue' })
+    chrome.runtime.sendMessage({ type: queueState.paused || isCoolingDown() ? 'resumeQueue' : 'pauseQueue' })
   );
   $('retryFailed').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'retryFailed' }));
   $('clearQueue').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'clearQueue' }));
@@ -101,7 +109,11 @@ async function init() {
   queueState = { queue: qs?.queue || [], paused: !!qs?.paused };
   renderQueueUI();
   const { lastStatus } = await chrome.storage.local.get('lastStatus');
-  if (lastStatus && Date.now() - lastStatus.ts < 30 * 60 * 1000) {
+  // A cooldown can run for hours — don't let the general 30-min staleness gate
+  // hide it on a cold panel reopen as long as the cooldown itself hasn't elapsed.
+  const stillCooling =
+    lastStatus?.countdownReason === 'cooldown' && Number(lastStatus.countdownUntil) > Date.now();
+  if (lastStatus && (Date.now() - lastStatus.ts < 30 * 60 * 1000 || stillCooling)) {
     liveStatus = lastStatus;
     applyLiveStatus();
   }
@@ -189,6 +201,25 @@ const PROVIDER_NOTE = {
 };
 // Which providers drive a logged-in web tab (vs. calling an API with a key).
 const WEB_PROVIDER = { fish: 'fish.audio', elevenlabs_web: 'elevenlabs.io' };
+// Display names for provider ids — used in cooldown/limit messaging.
+const PROVIDER_LABEL = {
+  fish: 'fish.audio',
+  elevenlabs_web: 'ElevenLabs (web)',
+  elevenlabs: 'ElevenLabs',
+  openai: 'OpenAI TTS',
+};
+// ms -> "2h 15m" / "15m 32s" / "32s" — cooldowns run minutes-to-hours, unlike
+// the seconds-scale human-pace gap, so this needs the larger units too.
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const total = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
 function applyProviderUI() {
   const p = currentProvider();
   $('autoTagLabel').hidden = p !== 'fish';
@@ -343,6 +374,81 @@ function wireVoiceSettings() {
     if (def) await saveProviderSetting({ ...def });
     renderVoiceSettings();
   });
+}
+
+// ── Provider cooldown (auto-resume on a detected limit) ─────────────────────
+// Mirrors the Human pace card but scoped to the currently-selected provider:
+// what happens when a generation comes back with a detected credit/quota/
+// rate-limit error. Off (default) hard-pauses the whole queue; on, it waits
+// the chosen minutes and retries that provider on its own.
+const COOLDOWN_PRESETS = [15, 30, 60, 240, 1440];
+
+function cooldownMinutesLabel(minutes) {
+  if (minutes % 60 === 0) return `${minutes / 60} hr`;
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function renderCooldownCard() {
+  const p = currentProvider();
+  $('cooldownProviderName').textContent = `· ${PROVIDER_LABEL[p] || p}`;
+  const cd = providerCooldown(settings, p);
+  $('cooldownAutoResume').checked = !!cd.autoResume;
+  $('cooldownOpts').hidden = !cd.autoResume;
+  const isPreset = COOLDOWN_PRESETS.includes(cd.minutes);
+  $('cooldownPreset').value = isPreset ? String(cd.minutes) : 'custom';
+  $('cooldownCustom').hidden = !cd.autoResume || isPreset;
+  $('cooldownMinutes').value = String(cd.minutes);
+  renderCooldownState();
+}
+
+// Just the state chip — split out so the 1s countdown tick can refresh it
+// without re-rendering (and losing focus in) the whole card.
+function renderCooldownState() {
+  const p = currentProvider();
+  const cd = providerCooldown(settings, p);
+  const el = $('cooldownState');
+  if (!cd.autoResume) {
+    el.textContent = 'Manual';
+    el.classList.add('off');
+    return;
+  }
+  el.classList.remove('off');
+  const cooling =
+    liveStatus &&
+    liveStatus.countdownReason === 'cooldown' &&
+    liveStatus.countdownProvider === p &&
+    Number.isFinite(liveStatus.countdownUntil) &&
+    liveStatus.countdownUntil > Date.now();
+  el.textContent = cooling
+    ? `On cooldown · ${formatDuration(liveStatus.countdownUntil - Date.now())}`
+    : `Auto-resume · ${cooldownMinutesLabel(cd.minutes)}`;
+}
+
+async function saveProviderCooldown(patch) {
+  const p = currentProvider();
+  const next = { ...settings.providerCooldowns, [p]: { ...providerCooldown(settings, p), ...patch } };
+  await persist({ providerCooldowns: next });
+}
+
+async function onCooldownToggle() {
+  await saveProviderCooldown({ autoResume: $('cooldownAutoResume').checked });
+  renderCooldownCard();
+}
+async function onCooldownPreset() {
+  const val = $('cooldownPreset').value;
+  if (val === 'custom') {
+    $('cooldownCustom').hidden = false;
+    $('cooldownMinutes').focus();
+    return;
+  }
+  await saveProviderCooldown({ minutes: Number(val) });
+  renderCooldownCard();
+}
+async function saveCooldownCustom() {
+  const minutes = Math.max(1, Math.min(1440, Math.round(Number($('cooldownMinutes').value) || 15)));
+  await saveProviderCooldown({ minutes });
+  renderCooldownCard();
 }
 
 // ── What's new (changelog) ──────────────────────────────────────────────────
@@ -812,22 +918,39 @@ async function onPaceCustom() {
 // ── Queue view (status bar + controls + list) ────────────────────────────────
 const Q_GLYPH = { pending: '•', running: '⟳', done: '✓', failed: '✗' };
 
+// A cooldown is "active" when the live status is currently carrying one for
+// the provider it named — derived from liveStatus (pushed live via storage),
+// no extra polling needed.
+function isCoolingDown() {
+  return !!(
+    liveStatus &&
+    liveStatus.countdownReason === 'cooldown' &&
+    Number.isFinite(liveStatus.countdownUntil) &&
+    liveStatus.countdownUntil > Date.now()
+  );
+}
+
 function renderQueueUI() {
   const { queue, paused } = queueState;
-  updateGenStatus(queue, paused);
-  renderQueueControls(queue, paused);
+  const cooling = isCoolingDown();
+  updateGenStatus(queue, paused, cooling);
+  renderQueueControls(queue, paused, cooling);
   renderQueueList(queue);
 }
 
-// Prominent Idle / Queued / Generating / Paused / Finished bar with counts.
-function updateGenStatus(queue, paused) {
+// Prominent Idle / Queued / Generating / Paused / Cooldown / Finished bar with counts.
+function updateGenStatus(queue, paused, coolingDown = false) {
   const done = queue.filter((i) => i.status === 'done').length;
   const failed = queue.filter((i) => i.status === 'failed').length;
   const left = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
   const running = queue.some((i) => i.status === 'running');
   let state = 'Idle';
   let cls = 'idle';
-  if (paused && left > 0) {
+  if (coolingDown && left > 0) {
+    const name = PROVIDER_LABEL[liveStatus?.countdownProvider] || liveStatus?.countdownProvider || 'Provider';
+    state = `Cooldown · ${name}`;
+    cls = 'cooldown';
+  } else if (paused && left > 0) {
     state = 'Paused';
     cls = 'paused';
   } else if (left > 0) {
@@ -845,7 +968,7 @@ function updateGenStatus(queue, paused) {
   $('gsCounts').hidden = queue.length === 0;
 }
 
-function renderQueueControls(queue, paused) {
+function renderQueueControls(queue, paused, coolingDown = false) {
   const active = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
   const done = queue.filter((i) => i.status === 'done').length;
   const failed = queue.filter((i) => i.status === 'failed').length;
@@ -857,7 +980,7 @@ function renderQueueControls(queue, paused) {
   $('queueInfo').textContent = parts.length ? `Queue: ${parts.join(' · ')}` : '';
   const pause = $('pauseQueue');
   pause.hidden = active === 0; // pause/resume only matters while there's work
-  pause.textContent = paused ? 'Resume' : 'Pause';
+  pause.textContent = paused || coolingDown ? 'Resume' : 'Pause';
   $('retryFailed').hidden = failed === 0;
 }
 
@@ -907,7 +1030,18 @@ function tickCountdown() {
   // Only tick while there's actually work in flight — otherwise a countdown left
   // over from a killed worker would stick on "Starting…".
   if (!queueState.queue.some((i) => i.status === 'pending' || i.status === 'running')) return;
-  const secs = Math.max(0, Math.ceil((liveStatus.countdownUntil - Date.now()) / 1000));
+  const remaining = liveStatus.countdownUntil - Date.now();
+  if (liveStatus.countdownReason === 'cooldown') {
+    const name = PROVIDER_LABEL[liveStatus.countdownProvider] || liveStatus.countdownProvider || 'Provider';
+    status(remaining > 0 ? `⏸ ${name} limit reached — resuming in ${formatDuration(remaining)}…` : 'Resuming…');
+    // The cooldown badge + Pause/Resume label depend on wall-clock time, not a
+    // storage write, so keep them live each tick too (until the background
+    // writes a fresh non-countdown status once the item actually resumes).
+    renderQueueUI();
+    renderCooldownState();
+    return;
+  }
+  const secs = Math.max(0, Math.ceil(remaining / 1000));
   status(secs > 0 ? `Waiting ${secs}s before the next generation…` : 'Starting…');
 }
 

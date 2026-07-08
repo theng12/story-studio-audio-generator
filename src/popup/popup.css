@@ -175,6 +175,8 @@ label.check input { width: auto; margin: 0; }
 .genstatus.running .gs-dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: gs-pulse 1.2s ease-in-out infinite; }
 .genstatus.paused { border-color: #e0a458; background: color-mix(in srgb, #e0a458 14%, transparent); }
 .genstatus.paused .gs-dot { background: #e0a458; }
+.genstatus.cooldown { border-color: #6a8cff; background: color-mix(in srgb, #6a8cff 14%, transparent); }
+.genstatus.cooldown .gs-dot { background: #6a8cff; }
 .genstatus.done { border-color: var(--ok); }
 .genstatus.done .gs-dot { background: var(--ok); }
 @keyframes gs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }

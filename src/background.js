@@ -9,7 +9,7 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getSettings, getApiKeys, getProviderSettings } from './lib/config.js';
+import { getSettings, getApiKeys, getProviderSettings, providerCooldown } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { buildDownloadPath } from './lib/naming.js';
 import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate, buildElevenVoiceSettings } from './lib/providers.js';
@@ -21,6 +21,25 @@ const ALARM = 'queueTick';
 const PAUSE_KEY = 'queuePaused';
 const NEXT_RUN_KEY = 'nextRunAt';
 const isPaused = async () => !!(await chrome.storage.local.get(PAUSE_KEY))[PAUSE_KEY];
+
+// Per-provider cooldown, keyed by provider id -> resume-at timestamp (ms). Set
+// when a generation fails with `.limit` (a detected credit/quota/rate-limit
+// error — see the content scripts / providers.js) and that provider's
+// auto-resume is on; cleared on manual Resume or once it naturally elapses.
+const COOLDOWN_KEY = 'providerCooldownUntil';
+const getCooldowns = async () => (await chrome.storage.local.get(COOLDOWN_KEY))[COOLDOWN_KEY] || {};
+async function setCooldownUntil(provider, resumeAt) {
+  const map = await getCooldowns();
+  map[provider] = resumeAt;
+  await chrome.storage.local.set({ [COOLDOWN_KEY]: map });
+}
+async function clearCooldown(provider) {
+  const map = await getCooldowns();
+  if (!(provider in map)) return;
+  delete map[provider];
+  await chrome.storage.local.set({ [COOLDOWN_KEY]: map });
+}
+const clearAllCooldowns = () => chrome.storage.local.remove(COOLDOWN_KEY);
 
 // Small guards so a missing/disabled API can never break top-level evaluation
 // (which would stop the message listener from registering — symptom: every
@@ -109,7 +128,8 @@ async function ensureProviderTab(p) {
 
 async function send(tabId, message) {
   const res = await chrome.tabs.sendMessage(tabId, message);
-  if (!res || !res.ok) throw new Error(res?.error || 'No response from the provider page.');
+  if (!res || !res.ok)
+    throw Object.assign(new Error(res?.error || 'No response from the provider page.'), { limit: !!res?.limit });
   return res;
 }
 
@@ -217,6 +237,28 @@ function randomHumanDelayMs(settings) {
 async function armHumanDelay(settings) {
   await chrome.storage.local.set({ [NEXT_RUN_KEY]: Date.now() + randomHumanDelayMs(settings) });
 }
+// If the next pending item's provider is on an active cooldown, park the queue
+// there (write a live countdown, arm the alarm to check back) instead of
+// pulling that item. Returns true when the queue should stop for now — only a
+// cooldown that's still armed AND has auto-resume on actually holds; a stale or
+// disabled one is cleared and the queue proceeds normally.
+async function holdForCooldown(provider, settings) {
+  const cd = providerCooldown(settings, provider);
+  const resumeAt = Number((await getCooldowns())[provider]) || 0;
+  if (!cd.autoResume || resumeAt <= Date.now()) {
+    if (resumeAt) await clearCooldown(provider);
+    return false;
+  }
+  const name = PROVIDERS[provider]?.name || provider;
+  await writeStatus(`${name} limit reached — the queue will resume automatically.`, 'info', {
+    countdownUntil: resumeAt,
+    countdownReason: 'cooldown',
+    countdownProvider: provider,
+  });
+  alarmCreate();
+  return true;
+}
+
 async function waitForNextRun(item) {
   for (;;) {
     if (await isPaused()) return;
@@ -380,6 +422,9 @@ async function processQueue() {
       let q = await getQueue();
       const idx = q.findIndex((i) => i.status === 'pending');
       if (idx < 0) break;
+      // Only a cooldown for the *next item's* provider should hold the queue —
+      // one provider's cooldown must never block a pending item for another.
+      if (await holdForCooldown(q[idx].provider || 'fish', settings)) return;
       const pendingId = q[idx].id;
 
       // Human-pace gap before starting (interruptible by Pause).
@@ -437,6 +482,42 @@ async function processQueue() {
         }
         await setQueue(q);
       } catch (e) {
+        // A detected credit/quota/rate-limit failure (.limit — see the content
+        // scripts / providers.js): re-pend the item (it's not really "failed",
+        // the provider just needs a break) and either hold for an auto-resume
+        // cooldown or hard-pause the whole queue, instead of ploughing through
+        // every remaining item only to hit the same error on each one.
+        if (e && e.limit) {
+          const provider = item.provider || 'fish';
+          const cd = providerCooldown(settings, provider);
+          q = await getQueue();
+          const it = q.find((i) => i.id === item.id);
+          if (it) {
+            it.status = 'pending';
+            delete it.error;
+            delete it.startedAt;
+            delete it.finishedAt;
+            delete it.durationMs;
+          }
+          await setQueue(q);
+          const name = PROVIDERS[provider]?.name || provider;
+          if (cd.autoResume) {
+            const resumeAt = Date.now() + cd.minutes * 60000;
+            await setCooldownUntil(provider, resumeAt);
+            await writeStatus(`${name} limit reached — auto-resuming automatically.`, 'info', {
+              countdownUntil: resumeAt,
+              countdownReason: 'cooldown',
+              countdownProvider: provider,
+            });
+            alarmCreate();
+          } else {
+            await chrome.storage.local.set({ [PAUSE_KEY]: true });
+            const detail = e.message ? ` ${e.message}` : '';
+            await writeStatus(`${name} limit reached — paused.${detail} Resume after it resets, or switch provider.`, 'info');
+            alarmClear();
+          }
+          return; // stop this tick; the alarm (auto) or manual Resume continues it
+        }
         // Auto-retry (generation OR save/download failure) up to maxRetries
         // before marking it failed — repairs a flaky download without user input.
         const maxRetries = Math.max(0, Number(settings.maxRetries) || 0);
@@ -489,7 +570,9 @@ async function pauseQueue() {
   return { ok: true };
 }
 async function resumeQueue() {
+  // Manual resume overrides every provider's cooldown, not just the pause flag.
   await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+  await clearAllCooldowns();
   alarmCreate();
   processQueue();
   return { ok: true };
@@ -513,6 +596,7 @@ async function retryFailed(id = null) {
   if (retried) {
     await setQueue(q);
     await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+    await clearAllCooldowns();
     await writeStatus(`Retrying ${retried} failed item${retried === 1 ? '' : 's'}…`, 'running');
     alarmCreate();
     processQueue();

@@ -17,7 +17,7 @@ window.addEventListener('message', (ev) => {
   const p = pending.get(d.id);
   if (!p) return;
   pending.delete(d.id);
-  d.ok ? p.resolve(d.result) : p.reject(new Error(d.error || 'main-world error'));
+  d.ok ? p.resolve(d.result) : p.reject(Object.assign(new Error(d.error || 'main-world error'), { limit: !!d.limit }));
 });
 
 function callMain(op, payload, timeoutMs = 120000) {
@@ -38,7 +38,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'eleven:generate') {
     callMain('generate', { text: msg.text, voice: msg.voice, model: msg.model, voiceSettings: msg.voiceSettings })
       .then((r) => sendResponse({ ok: true, ...r }))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit }));
     return true;
   }
   if (msg?.type === 'eleven:listVoices') {
