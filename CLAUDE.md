@@ -1,4 +1,4 @@
-# Story Studio TTS (`fish-tts-extension`)
+# Story Studio TTS (`story-studio-tts`)
 
 MV3 extension: turns Story Studio KH scripts into narration audio and saves each
 file with the correct name. See `README.md` for the full provider/flow writeup;
