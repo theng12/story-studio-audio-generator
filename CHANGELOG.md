@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.1 — Fix chunked chapters showing as missing but un-generatable
+
+A chapter whose script is long enough that Story Studio splits it for TTS lands
+on disk as several files (`EP0042_Chapter_03_part1.mp3`, `_part2.mp3`, …) with
+**no** bare `_Chapter_03.mp3`. The panel matched section names against
+`_Chapter_NN.mp3`, so those `_partN` files were silently dropped: `audio-status`
+counted them (e.g. `7/9`) but no checkbox was ever drawn for them and
+"generate whole episode/project" skipped them — a stuck, invisible "missing".
+
+- **`missing_files` is now authoritative.** New `sectionSlugFromFile()` maps
+  every emitted shape back to its section — `_partN` (chunk), `_vN` (new
+  version), and `_segNN_<speaker>_partNN` (character-routed) all collapse to
+  `Chapter_03` / `Introduction`. Unrecognised names still get a row rather than
+  vanishing.
+- **Generate the section, not the part.** Missing parts of the same chapter
+  dedupe to one `Chapter_03` job; regenerating the section fills every missing
+  part (the app's skip-existing only remakes what's absent).
+
 ## 0.7.0 — Cooldown on a credit/quota limit (stop spamming a limited provider)
 
 Previously, if a provider ran out of credits mid-queue, every remaining item

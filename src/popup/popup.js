@@ -1,7 +1,7 @@
 import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDER_SETTING_DEFAULTS, providerCooldown } from '../lib/config.js';
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
-import { buildDownloadPath } from '../lib/naming.js';
+import { buildDownloadPath, sectionSlugFromFile } from '../lib/naming.js';
 import { ELEVEN_MODELS, ELEVEN_STABILITY_MODES, elevenModel } from '../lib/providers.js';
 
 const $ = (id) => document.getElementById(id);
@@ -670,13 +670,13 @@ async function loadSections() {
       client.chapterList(slug, ctx.episodeCode, ctx.episodeTitle).catch(() => ({ chapters: [] })),
     ]);
 
+    // audio-status.missing_files is authoritative. Map every missing file back
+    // to its section (a chunked chapter shows up as several _partN files that
+    // all belong to one section) and never drop an unrecognised name.
     const missing = new Set();
     for (const f of audio.missing_files || []) {
-      if (/_Introduction\.(mp3|wav)$/i.test(f)) missing.add('Introduction');
-      else {
-        const m = f.match(/_Chapter_(\d+)\.(?:mp3|wav)$/i);
-        if (m) missing.add(`Chapter_${pad(parseInt(m[1], 10))}`);
-      }
+      const sec = sectionSlugFromFile(f, ctx.episodeCode);
+      if (sec) missing.add(sec);
     }
 
     const titles = {};
@@ -693,9 +693,22 @@ async function loadSections() {
     }
 
     const cand = [];
-    if (hasIntro) cand.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
+    const seen = new Set();
+    if (hasIntro || missing.has('Introduction')) {
+      cand.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
+      seen.add('Introduction');
+    }
     for (const num of [...chapNums].sort((a, b) => a - b)) {
-      cand.push({ slug: `Chapter_${pad(num)}`, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}` });
+      const slug = `Chapter_${pad(num)}`;
+      cand.push({ slug, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}` });
+      seen.add(slug);
+    }
+    // Any missing section that isn't the intro or a Chapter_NN still gets a row
+    // — a generatable oddity beats a hidden, stuck "missing" count.
+    for (const s of missing) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      cand.push({ slug: s, kind: 'chapter', num: null, label: s.replace(/_/g, ' ') });
     }
     for (const s of cand) s.present = !missing.has(s.slug);
     currentSections = cand;

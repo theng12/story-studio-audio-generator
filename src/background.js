@@ -11,7 +11,7 @@
 
 import { getSettings, getApiKeys, getProviderSettings, providerCooldown } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
-import { buildDownloadPath } from './lib/naming.js';
+import { buildDownloadPath, sectionSlugFromFile } from './lib/naming.js';
 import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate, buildElevenVoiceSettings } from './lib/providers.js';
 
 const QUEUE_KEY = 'queue';
@@ -365,12 +365,21 @@ async function enqueueProject({ slug, target, voice, autoTag, provider, provider
 }
 
 // Build queue items from an audio-status missing_files list.
+//
+// missing_files is authoritative but lists one file PER CHUNK, so a chunked
+// chapter appears as several `_partN` names. Map each back to its section and
+// dedupe: two missing parts of Chapter 3 collapse to ONE `Chapter_03` job,
+// which regenerates the section and fills every missing part at once.
 function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag, provider, providerSettings }) {
   const out = [];
+  const seen = new Set();
   for (const f of missingFiles || []) {
-    const isIntro = /_Introduction\.(mp3|wav)$/i.test(f);
-    const m = f.match(/_Chapter_(\d+)\.(?:mp3|wav)$/i);
-    if (!isIntro && !m) continue;
+    const section = sectionSlugFromFile(f, code);
+    if (!section || seen.has(section)) continue;
+    const isIntro = section === 'Introduction';
+    const m = section.match(/^Chapter_(\d+)$/);
+    if (!isIntro && !m) continue; // unknown section shape — no text endpoint to fetch it
+    seen.add(section);
     const num = isIntro ? null : parseInt(m[1], 10);
     const numStr = isIntro ? '' : String(num).padStart(2, '0');
     out.push(
