@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.5 - Operational controls
+
+- Kept pacing and cooldown settings visible as compact expandable control rows.
+- Moved queue actions below the visible queue and show each action only when it can be used.
+
 ## 0.7.4 - Story Studio Audio Generator
 
 - Renamed the extension across Chrome, the side panel, Settings, and public documentation.

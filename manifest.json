@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Story Studio Audio Generator",
-  "version": "0.7.4",
-  "description": "Generate narration audio through fish.audio or ElevenLabs web sessions from your Story Studio KH scripts and save each file with the correct name.",
+  "version": "0.7.5",
+  "description": "Generate organized narration audio from Story Studio KH scripts through compatible web sessions.",
   "permissions": ["downloads", "storage", "scripting", "tabs", "sidePanel", "alarms"],
   "host_permissions": [
     "http://localhost/*",

@@ -42,17 +42,17 @@
           <div class="activity-progress" aria-hidden="true"><span id="activityProgressFill"></span></div>
           <span id="activityProgressText">0%</span>
         </div>
-        <div id="queueControls" class="queue-actions" hidden>
-          <button id="pauseQueue" hidden>Pause</button>
-          <button id="retryFailed" hidden>Retry failed</button>
-          <button id="clearQueue">Clear pending</button>
-        </div>
         <div id="queueDetail" hidden>
           <div class="queue-table-head"><span id="queueInfo">Queue</span><span>Status</span></div>
           <ul id="queueList" class="queuelist" hidden></ul>
           <div class="queue-legend" aria-label="Queue status legend">
             <span class="pending">◌ Pending</span><span class="running">◌ Running</span><span class="done">✓ Done</span><span class="failed">! Failed</span>
           </div>
+        </div>
+        <div id="queueControls" class="queue-actions" hidden>
+          <button id="pauseQueue" hidden>Pause</button>
+          <button id="retryFailed" hidden>Retry failed</button>
+          <button id="clearQueue" hidden>Clear pending</button>
         </div>
       </div>
     </section>
@@ -185,12 +185,11 @@
       </div>
     </div>
 
-    <details class="advanced-panel">
-      <summary>Human pace</summary>
+    <details class="advanced-panel operational-disclosure">
+      <summary><span>Human pace</span><span id="humanPaceState" class="pace-state" aria-live="polite"></span></summary>
       <section class="pace-card">
       <div class="row between">
         <span class="muted small">Human pace <span class="muted">· gap between generations</span></span>
-        <span id="humanPaceState" class="pace-state" aria-live="polite"></span>
       </div>
       <select id="humanPacePreset">
         <option value="off">Off (no delay)</option>
@@ -208,12 +207,11 @@
       </section>
     </details>
 
-    <details class="advanced-panel">
-      <summary>Provider cooldown</summary>
+    <details class="advanced-panel operational-disclosure">
+      <summary><span>Provider cooldown</span><span id="cooldownState" class="pace-state" aria-live="polite"></span></summary>
       <section class="pace-card">
       <div class="row between">
         <span class="muted small">Provider cooldown <span class="muted" id="cooldownProviderName"></span></span>
-        <span id="cooldownState" class="pace-state" aria-live="polite"></span>
       </div>
       <label class="check">
         <input type="checkbox" id="cooldownAutoResume" />
