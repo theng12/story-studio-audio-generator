@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.14 - Story Studio workflow
+
+- Removed the standalone pasted-script workflow and browser-download output. Audio generation now starts from and returns to Story Studio projects only.
+
 ## 0.7.13 - Provider action
 
 - Standardized the provider open action as a compact button.

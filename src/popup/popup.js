@@ -1,7 +1,7 @@
 import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDER_SETTING_DEFAULTS, providerCooldown } from '../lib/config.js';
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
-import { buildDownloadPath, sectionSlugFromFile } from '../lib/naming.js';
+import { sectionSlugFromFile } from '../lib/naming.js';
 import { ELEVEN_MODELS, ELEVEN_STABILITY_MODES, elevenModel } from '../lib/providers.js';
 
 const $ = (id) => document.getElementById(id);
@@ -18,7 +18,7 @@ function rememberVoice(voice) {
 }
 
 let settings;
-let client; // StudioClient (companion mode)
+let client; // StudioClient for the connected Story Studio workspace
 let queueState = { queue: [], paused: false };
 let liveStatus = null; // last persisted status (may carry a live countdown)
 let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
@@ -41,26 +41,10 @@ async function init() {
   $('extensionVersion').title = `${manifest.name} v${manifest.version}`;
   initWhatsNew(manifest.version);
   settings = await getSettings();
-  renderModeControl();
-  $('switchMode').addEventListener('click', switchMode);
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openProviderPage').addEventListener('click', onOpenProviderPage);
-  $('generate').addEventListener('click', onGenerate);
   $('loadVoices').addEventListener('click', loadVoices);
   await initVoices();
-
-  // Save-target selector. Project-folder saving needs companion identifiers,
-  // so in paste mode we force Downloads.
-  const saveSel = $('saveTarget');
-  saveSel.value = settings.saveTarget || 'project';
-  saveSel.addEventListener('change', () => {
-    persist({ saveTarget: saveSel.value });
-    updatePreview();
-  });
-  if (settings.mode !== 'companion') {
-    saveSel.value = 'download';
-    $('saveTargetLabel').hidden = true;
-  }
 
   // Provider selector. Switching provider reloads its voices and shows the
   // auto-tag option only for fish.audio (it's a fish-specific feature).
@@ -147,68 +131,35 @@ async function init() {
     }
   });
 
-  if (settings.mode === 'companion') {
-    $('companionPane').hidden = false;
-    await restoreConnectionStatus();
-    $('generate').hidden = true; // companion uses the multi-select "Queue selected"
-    $('queueSelected').hidden = false;
-    $('queueEpisode').hidden = false;
-    $('queueProject').hidden = false;
-    $('queueSelected').addEventListener('click', onQueueSelected);
-    $('queueEpisode').addEventListener('click', onQueueEpisode);
-    $('queueProject').addEventListener('click', onQueueProject);
-    $('reloadSections').addEventListener('click', onReloadSections);
-    $('testConn').addEventListener('click', testConnection);
-    $('selectAll').addEventListener('change', (e) => {
-      $('sectionList')
-        .querySelectorAll('input[type=checkbox]')
-        .forEach((c) => {
-          if (!c.disabled) c.checked = e.target.checked;
-        });
-      updateSelectionSummary();
-    });
-    // Regeneration toggles.
-    $('showDoneEpisodes').checked = !!settings.showDoneEpisodes;
-    $('includeExisting').checked = !!settings.includeExisting;
-    updateCompanionHints();
-    $('showDoneEpisodes').addEventListener('change', async () => {
-      await persist({ showDoneEpisodes: $('showDoneEpisodes').checked });
-      updateCompanionHints();
-      await loadEpisodes();
-    });
-    $('includeExisting').addEventListener('change', async () => {
-      await persist({ includeExisting: $('includeExisting').checked });
-      updateCompanionHints();
-      renderSections(); // re-render (enables/disables already-voiced rows) — no refetch
-    });
-    await initCompanion();
-  } else {
-    $('pastePane').hidden = false;
-    $('queueSelected').hidden = true;
-    $('queueEpisode').hidden = true;
-    $('queueProject').hidden = true;
-    ['pasteCode', 'pasteLabel', 'pasteText'].forEach((id) =>
-      $(id).addEventListener('input', updatePreview)
-    );
-    updatePreview();
-  }
-}
-
-function renderModeControl() {
-  const studio = settings.mode !== 'paste';
-  $('modeName').textContent = studio ? 'Story Studio' : 'Standalone';
-  const switcher = $('switchMode');
-  switcher.textContent = studio ? 'Switch to Standalone' : 'Switch to Story Studio';
-  switcher.title = studio
-    ? 'Switch to Standalone for a locally pasted script'
-    : 'Switch to Story Studio for project-connected work';
-}
-
-async function switchMode() {
-  const switcher = $('switchMode');
-  switcher.disabled = true;
-  await persist({ mode: settings.mode === 'paste' ? 'companion' : 'paste' });
-  window.location.reload();
+  await restoreConnectionStatus();
+  $('queueSelected').addEventListener('click', onQueueSelected);
+  $('queueEpisode').addEventListener('click', onQueueEpisode);
+  $('queueProject').addEventListener('click', onQueueProject);
+  $('reloadSections').addEventListener('click', onReloadSections);
+  $('testConn').addEventListener('click', testConnection);
+  $('selectAll').addEventListener('change', (e) => {
+    $('sectionList')
+      .querySelectorAll('input[type=checkbox]')
+      .forEach((c) => {
+        if (!c.disabled) c.checked = e.target.checked;
+      });
+    updateSelectionSummary();
+  });
+  // Regeneration toggles.
+  $('showDoneEpisodes').checked = !!settings.showDoneEpisodes;
+  $('includeExisting').checked = !!settings.includeExisting;
+  updateStudioHints();
+  $('showDoneEpisodes').addEventListener('change', async () => {
+    await persist({ showDoneEpisodes: $('showDoneEpisodes').checked });
+    updateStudioHints();
+    await loadEpisodes();
+  });
+  $('includeExisting').addEventListener('change', async () => {
+    await persist({ includeExisting: $('includeExisting').checked });
+    updateStudioHints();
+    renderSections(); // re-render (enables/disables already-voiced rows) — no refetch
+  });
+  await initStudio();
 }
 
 // Persist a settings patch and keep our local copy in sync.
@@ -216,7 +167,7 @@ async function persist(patch) {
   settings = await saveSettings(patch);
 }
 
-function updateCompanionHints() {
+function updateStudioHints() {
   const eh = $('episodeHint');
   if (eh) eh.textContent = settings.showDoneEpisodes ? '(all episodes with a script)' : '(script done, audio missing)';
 }
@@ -551,17 +502,17 @@ function costPhrase() {
   return currentProvider() === 'elevenlabs_web' ? 'uses your ElevenLabs quota' : 'uses your fish.audio web plan';
 }
 
-// ── Companion mode ─────────────────────────────────────────────────────────
+// ── Story Studio workflow ──────────────────────────────────────────────────
 //
 // We do NOT pre-check /auth/me. On localhost the Story Studio server bypasses
 // auth for loopback requests, so no login is needed at all — and /auth/me
 // (a public endpoint that always checks the cookie) would wrongly 401 and
 // force a needless login prompt. Instead we just load the data; only a real
 // 401 from a data call (a remote/tailnet server) shows the login form.
-async function initCompanion() {
+async function initStudio() {
   client = new StudioClient(settings.studioBaseUrl);
   try {
-    await loadCompanionData();
+    await loadStudioData();
   } catch (e) {
     if (e.status !== 401) {
       const url = settings.studioBaseUrl || '';
@@ -580,7 +531,7 @@ async function initCompanion() {
     try {
       status('Signing in…');
       await client.login(cred.username, cred.password);
-      await loadCompanionData();
+      await loadStudioData();
       status('');
     } catch {
       status('Saved login was rejected — update it in Settings (⚙).');
@@ -614,7 +565,7 @@ async function invalidateEpisodes(slug) {
 
 // Populate the project dropdown (cheap — just a manifest read) and lazily load
 // episodes for the selected project only. No more scanning every project.
-async function loadCompanionData() {
+async function loadStudioData() {
   const projects = await client.listProjects();
   const sel = $('project');
   sel.innerHTML = '';
@@ -837,14 +788,10 @@ function itemFromSection(s) {
     episodeTitle: ctx.episodeTitle,
     sectionSlug: s.slug,
     chapterNumber: s.num ?? null,
-    target: $('saveTarget').value,
     provider: currentProvider(),
     voice: $('voice').value,
     autoTag: $('autoTag').checked,
     providerSettings: currentProviderSettings(),
-    project: ctx.project || '',
-    chapterNum: s.num != null ? pad(s.num) : '',
-    chapterLabel: s.label,
     label: `${ctx.episodeCode} ${s.label}`,
   };
 }
@@ -864,7 +811,7 @@ async function onQueueSelected() {
     'Queue'
   );
   if (!ok) return;
-  persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
+  persist(rememberVoice(voice));
   const items = sel.map(itemFromSection);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
   status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
@@ -882,13 +829,12 @@ async function onQueueProject() {
     'Queue all'
   );
   if (!ok) return;
-  persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
+  persist(rememberVoice(voice));
   status(`Building a queue for all of ${ctx.project}…`);
   const r = await chrome.runtime.sendMessage({
     type: 'enqueueProject',
     payload: {
       slug: ctx.projectSlug,
-      target: $('saveTarget').value,
       provider: currentProvider(),
       voice,
       autoTag: $('autoTag').checked,
@@ -915,7 +861,7 @@ async function onQueueEpisode() {
     'Queue'
   );
   if (!ok) return;
-  persist({ saveTarget: $('saveTarget').value, ...rememberVoice(voice) });
+  persist(rememberVoice(voice));
   const items = missing.map(itemFromSection);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
   status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
@@ -924,7 +870,6 @@ async function onQueueEpisode() {
 // Re-pull the current project's episodes + the open episode's chapters/audio
 // status from Story Studio (drops the 5-min cache) — "load script/audio".
 async function onReloadSections() {
-  if (settings.mode !== 'companion') return;
   if (!ctx.projectSlug) return status('Pick a project first.');
   await invalidateEpisodes(ctx.projectSlug);
   await loadEpisodes();
@@ -1168,7 +1113,7 @@ async function onQueueChanged(oldQ, newQ) {
   renderQueueUI();
   const active = newQ.some((i) => i.status === 'pending' || i.status === 'running');
   const wasActive = oldQ.some((i) => i.status === 'pending' || i.status === 'running');
-  if (wasActive && !active && settings.mode === 'companion' && ctx.episodeCode) {
+  if (wasActive && !active && ctx.episodeCode) {
     await invalidateEpisodes(ctx.projectSlug);
     await loadSections();
   }
@@ -1213,23 +1158,6 @@ async function loadVoices() {
   await chrome.storage.local.set({ voicesCache: cache });
   renderVoices(res.voices);
   status('');
-}
-
-// ── Shared ─────────────────────────────────────────────────────────────────
-function pasteTokens() {
-  const code = $('pasteCode').value.trim() || 'audio';
-  const label = $('pasteLabel').value.trim();
-  return { project: '', episodeCode: code, episodeTitle: '', chapterNum: '', chapterLabel: label };
-}
-
-function updatePreview() {
-  // Only the paste flow has a single deterministic filename to preview;
-  // companion mode shows its target via the section list + Save-to selector.
-  if (settings.mode === 'paste') {
-    $('filenamePreview').textContent = `↳ Downloads/${buildDownloadPath(settings, pasteTokens())}`;
-  } else {
-    $('filenamePreview').textContent = '';
-  }
 }
 
 // Styled confirmation overlay → resolves true (OK) / false (Cancel).
@@ -1309,40 +1237,11 @@ async function testConnection() {
     const projects = await client.listProjects();
     const n = Array.isArray(projects) ? projects.length : (projects.projects || []).length;
     await recordConnectionTest('connected', `${n} project${n !== 1 ? 's' : ''} available`);
-    await loadCompanionData(); // refresh dropdowns now that we're reachable
+    await loadStudioData(); // refresh dropdowns now that we're reachable
   } catch (e) {
     const local = /localhost|127\.0\.0\.1/.test(settings.studioBaseUrl || '');
     await recordConnectionTest('failed', `${e.message}. ${local ? 'Running?' : 'Running, granted, logged in?'}`);
   } finally {
     button.disabled = false;
   }
-}
-
-// Paste mode: queue the pasted text as a single Download item.
-async function onGenerate() {
-  const voice = $('voice').value;
-  if (!voice) return status('Pick a voice first (↻ to load).');
-  const text = $('pasteText').value.trim();
-  if (!text) return status('Paste some script text first.');
-  persist({ ...rememberVoice(voice), saveTarget: $('saveTarget').value });
-  const code = $('pasteCode').value.trim() || 'audio';
-  const label = $('pasteLabel').value.trim() || code;
-  const item = {
-    kind: 'paste',
-    text,
-    target: 'download',
-    provider: currentProvider(),
-    voice,
-    autoTag: $('autoTag').checked,
-    providerSettings: currentProviderSettings(),
-    label,
-    episodeCode: code,
-    episodeTitle: '',
-    project: '',
-    chapterNum: '',
-    chapterLabel: $('pasteLabel').value.trim() || '',
-  };
-  const r = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
-  if (!r?.ok) return status(`Queue failed: ${r?.error || NORESP}`);
-  status(r.added ? `Queued ${item.label}.` : 'Already in the queue.');
 }

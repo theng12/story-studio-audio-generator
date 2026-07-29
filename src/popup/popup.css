@@ -65,18 +65,6 @@ header {
   font-size: 11px;
 }
 .applied-settings:empty { display: none; }
-.workflow-mode {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: -2px 0 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--divider);
-}
-.workflow-mode-label { color: var(--muted); font-size: 11px; }
-.workflow-mode-label strong { color: var(--fg); font-weight: 650; }
-.mode-switch { padding: 5px 8px; color: var(--link); font-size: 11px; }
 .activity-panel {
   margin: 0 0 14px;
   padding: 2px;
@@ -329,7 +317,6 @@ label.check input { width: auto; margin: 0; }
 .queue-legend .pending { color: var(--muted); }.queue-legend .running { color: var(--link); }.queue-legend .done { color: var(--ok); }.queue-legend .failed { color: var(--danger); }
 .muted { color: var(--muted); font-size: 11px; }
 .small { font-size: 12px; }
-#filenamePreview { word-break: break-all; }
 #status { min-height: 16px; }
 
 /* hidden attribute always wins (so the overlay's display:flex can't override it) */

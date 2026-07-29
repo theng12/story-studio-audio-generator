@@ -12,11 +12,11 @@ Keep `README.md` product-level and provider-neutral. Do not document service-spe
 - `src/content/`: browser-session bridges for compatible services.
 - `src/lib/`: configuration, naming, project integration, and service adapters.
 - `src/popup/`: side panel workflow.
-- `src/options/`: preferences and input-mode settings.
+- `src/options/`: Story Studio connection and output preferences.
 
 ## Product Boundaries
 
 - Keep the queue durable, observable, and safe to pause or retry.
-- Preserve project-folder and Downloads save targets.
+- Preserve Story Studio project-folder ingestion.
 - Keep service integrations isolated behind the shared adapter layer.
 - Keep public copy focused on user outcomes, not integration mechanics.

@@ -12,13 +12,9 @@ const $ = (id) => document.getElementById(id);
 // Fields that have an input on THIS page. (The voice lives in the side panel,
 // not here — don't list fishVoice or $(f) is null and load() aborts before the
 // buttons are wired.)
-const FIELDS = ['mode', 'theme', 'studioBaseUrl', 'saveTarget', 'downloadSubdir', 'filenameTemplate'];
+const FIELDS = ['theme', 'studioBaseUrl'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
-
-function toggleCompanion() {
-  $('companionOpts').style.display = $('mode').value === 'companion' ? '' : 'none';
-}
 
 async function load() {
   await initTheme();
@@ -29,8 +25,6 @@ async function load() {
   const cred = await getCredentials();
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
-  toggleCompanion();
-  $('mode').addEventListener('change', toggleCompanion);
   $('save').addEventListener('click', save);
   $('grantAccess').addEventListener('click', grantAccess);
   $('testConnection').addEventListener('click', testConnection);

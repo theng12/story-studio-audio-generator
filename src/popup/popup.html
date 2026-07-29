@@ -22,11 +22,6 @@
 
     <div id="appliedSettings" class="applied-settings" aria-live="polite"></div>
 
-    <div class="workflow-mode" aria-label="Working mode">
-      <span class="workflow-mode-label">Mode <span aria-hidden="true">·</span> <strong id="modeName">Story Studio</strong></span>
-      <button id="switchMode" class="mode-switch" type="button" title="Switch to Standalone for a locally pasted script">Switch to Standalone</button>
-    </div>
-
     <section id="activityPanel" class="activity-panel" aria-live="polite">
       <div class="activity-inner">
         <div class="batch-head">
@@ -77,12 +72,6 @@
           <button id="loadVoices" title="Load voices from the provider" aria-label="Load voices">↻</button>
         </div>
       </label>
-      <label id="saveTargetLabel">Save to
-        <select id="saveTarget">
-          <option value="project">Story Studio project folder</option>
-          <option value="download">Downloads folder</option>
-        </select>
-      </label>
     </div>
     <p id="providerNote" class="muted"></p>
     <div class="row end open-provider-row">
@@ -127,8 +116,8 @@
       </section>
     </details>
 
-    <!-- Companion mode: pick from a running Story Studio server -->
-    <section id="companionPane" hidden>
+    <!-- Pick from a running Story Studio server -->
+    <section id="studioPane">
       <div class="studio-connection">
         <button id="testConn" class="studio-connection-button" type="button">Test Studio connection</button>
         <span id="connStatus" class="connection-status" role="status" aria-live="polite"></span>
@@ -160,34 +149,16 @@
       <div id="sectionList" class="sectionlist"></div>
     </section>
 
-    <!-- Paste mode: free text -->
-    <section id="pastePane" hidden>
-      <label>Episode code (for filename)
-        <input id="pasteCode" placeholder="e.g. TN0005" />
-      </label>
-      <label>Label
-        <input id="pasteLabel" placeholder="e.g. 03 Chapter" />
-      </label>
-      <label>Script text
-        <textarea id="pasteText" rows="8" placeholder="Paste the narration here…"></textarea>
-      </label>
-    </section>
-
     <label class="check" id="autoTagLabel">
       <input type="checkbox" id="autoTag" />
       Auto-tag emotions &amp; pauses (Fish "Auto Tag All")
     </label>
 
-    <div class="row">
-      <span id="filenamePreview" class="muted"></span>
-    </div>
-
     <div class="batch-actions">
-      <button id="generate" class="primary">Generate &amp; save</button>
-      <button id="queueSelected" class="primary" hidden>Queue selected</button>
+      <button id="queueSelected" class="primary">Queue selected</button>
       <div class="batch-secondary">
-        <button id="queueEpisode" hidden>Queue this episode</button>
-        <button id="queueProject" hidden>Queue all pending</button>
+        <button id="queueEpisode">Queue this episode</button>
+        <button id="queueProject">Queue all pending</button>
       </div>
     </div>
 

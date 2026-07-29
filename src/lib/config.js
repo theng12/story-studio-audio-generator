@@ -1,16 +1,9 @@
 // Central defaults + settings access for the extension.
 //
-// Two run modes, chosen on the Options page at install time:
-//   - "companion": read scripts straight from a running Story Studio KH
-//                  server (desktop API on :8000, or server-mode on :8766).
-//   - "paste":     the user pastes/【selects】 the script text manually; no
-//                  dependency on Story Studio running.
-//
 // Everything here is just defaults — the live values come from
 // chrome.storage.sync and are edited on the Options page.
 
 export const DEFAULTS = {
-  mode: 'companion', // "companion" | "paste" — Story Studio is the default
   // UI color theme: 'light' | 'dark' | 'system' (follow the OS setting).
   theme: 'system',
   // Story Studio server. Default port 8766, but fully editable — set this to a
@@ -21,28 +14,16 @@ export const DEFAULTS = {
   studioUsername: '',
   // NOTE: we never store the password; the user logs in through the popup
   // and the session cookie is held by the browser for studioBaseUrl.
-  // Where downloaded audio lands, relative to the browser's Downloads dir.
-  // Tokens: {project} {episodeCode} {episodeTitle} are filled per job.
-  downloadSubdir: 'StoryStudioAudio/{project}/{episodeCode}',
-  // Filename template (extension appended automatically).
-  // Tokens: {episodeCode} {chapterNum} {chapterLabel} {project}
-  filenameTemplate: '{episodeCode} - {chapterNum} {chapterLabel}',
   // Active TTS provider: 'fish' | 'elevenlabs_web'.
   provider: 'fish',
   // Remembered voice per provider (so switching providers keeps each choice).
   voiceByProvider: {}, // { fish: '<id>', elevenlabs_web: '<id>' }
   // Default fish.audio voice id/name (legacy; mirrored into voiceByProvider).
   fishVoice: '',
-  // Where generated audio goes:
-  //   "project"  — POST back to Story Studio so it lands in the episode's
-  //                real audio folder ({CODE}_Chapter_NN.mp3) and rebuilds
-  //                audio_chapters.json. Companion mode only.
-  //   "download" — save into the browser Downloads folder (works always).
-  saveTarget: 'project',
   // Auto-tag the script with Fish's emotion/pause tags before generating
   // (POST /enhance/text). Off by default.
   autoTag: false,
-  // Regeneration toggles (companion mode), borrowed from the sibling Flow ext:
+  // Regeneration toggles for the Story Studio workflow:
   //   showDoneEpisodes — also list episodes whose audio is already complete.
   //   includeExisting  — also list chapters/intro that already have audio,
   //                      so you can re-voice them (edited script, new voice…).
@@ -56,7 +37,7 @@ export const DEFAULTS = {
   // pace" presets set these two. Default ≈ the old fixed 5–12s gap.
   humanDelayMinSec: 5,
   humanDelayMaxSec: 12,
-  // Auto-retry a failed generation/download this many times before giving up
+  // Auto-retry a failed generation or Studio ingest before giving up
   // and marking it failed (0 = off). The manual "Retry failed" button always
   // works regardless of this.
   maxRetries: 1,
@@ -104,9 +85,13 @@ const STORAGE_KEY = 'settings';
 
 // Earlier releases offered direct API providers. Keep saved preferences usable
 // without ever sending them through a different provider unexpectedly.
-function migrateLegacyProviders(settings) {
+function migrateLegacySettings(settings) {
   if (!settings) return settings;
   const next = { ...settings };
+  delete next.mode;
+  delete next.saveTarget;
+  delete next.downloadSubdir;
+  delete next.filenameTemplate;
   if (next.provider === 'elevenlabs') next.provider = 'elevenlabs_web';
   if (next.provider === 'openai') next.provider = 'fish';
   if (next.voiceByProvider?.elevenlabs && !next.voiceByProvider.elevenlabs_web) {
@@ -123,7 +108,12 @@ function migrateLegacyProviders(settings) {
 
 export async function getSettings() {
   const stored = await chrome.storage.sync.get(STORAGE_KEY);
-  return { ...DEFAULTS, ...migrateLegacyProviders(stored[STORAGE_KEY] || {}) };
+  const saved = stored[STORAGE_KEY] || {};
+  const migrated = migrateLegacySettings(saved);
+  if (JSON.stringify(saved) !== JSON.stringify(migrated)) {
+    await chrome.storage.sync.set({ [STORAGE_KEY]: migrated });
+  }
+  return { ...DEFAULTS, ...migrated };
 }
 
 export async function saveSettings(patch) {

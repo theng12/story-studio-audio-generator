@@ -2,7 +2,7 @@
 //
 // The panel enqueues work (a section, a whole episode, or a whole project);
 // this worker processes one item at a time, human-paced, writing each result
-// to the Story Studio project folder (or Downloads). The queue lives in
+// to the Story Studio project folder. The queue lives in
 // chrome.storage, so it survives the panel closing AND the worker being
 // killed: a chrome.alarms tick wakes the worker to resume any pending items.
 //
@@ -11,7 +11,7 @@
 
 import { getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
-import { buildDownloadPath, sectionSlugFromFile } from './lib/naming.js';
+import { sectionSlugFromFile } from './lib/naming.js';
 import { PROVIDERS, buildElevenVoiceSettings } from './lib/providers.js';
 
 const QUEUE_KEY = 'queue';
@@ -158,49 +158,40 @@ async function produceAudio(job, settings) {
   });
 }
 
-// Generate one section's audio and save it (project folder or Downloads).
+// Generate one Story Studio section's audio and ingest it into its project.
 async function generateAndSave(job, settings) {
   const { base64, mime } = await produceAudio(job, settings);
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
-
-  if (job.target === 'project' && job.slug && job.episodeCode) {
-    const base = (settings.studioBaseUrl || '').replace(/\/+$/, '');
-    const url = `${base}/api/projects/${encodeURIComponent(job.slug)}/episodes/${encodeURIComponent(
-      job.episodeCode
-    )}/audio-ingest`;
-    const res = await fetch(url, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        slug: job.sectionSlug,
-        chapterNumber: job.chapterNumber,
-        audioBase64: base64,
-        format: ext,
-      }),
-    });
-    if (!res.ok) {
-      let detail = `${res.status} ${res.statusText}`;
-      try {
-        const j = await res.json();
-        if (j?.detail) detail = j.detail;
-      } catch {
-        /* non-JSON */
-      }
-      throw new Error(`Story Studio rejected the audio: ${detail}`);
-    }
-    const j = await res.json();
-    return { savedAs: j.saved_as, savedIn: j.audio_dir, target: 'project' };
+  if (!job.slug || !job.episodeCode || !job.sectionSlug) {
+    throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
   }
-
-  const filename = job.downloadPath.replace(/\.(mp3|wav)$/i, '') + `.${ext}`;
-  const downloadId = await chrome.downloads.download({
-    url: `data:${mime};base64,${base64}`,
-    filename,
-    saveAs: false,
-    conflictAction: 'uniquify',
+  const base = (settings.studioBaseUrl || '').replace(/\/+$/, '');
+  const url = `${base}/api/projects/${encodeURIComponent(job.slug)}/episodes/${encodeURIComponent(
+    job.episodeCode
+  )}/audio-ingest`;
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      slug: job.sectionSlug,
+      chapterNumber: job.chapterNumber,
+      audioBase64: base64,
+      format: ext,
+    }),
   });
-  return { downloadId, savedAs: filename, target: 'download' };
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) detail = j.detail;
+    } catch {
+      /* non-JSON */
+    }
+    throw new Error(`Story Studio rejected the audio: ${detail}`);
+  }
+  const j = await res.json();
+  return { savedAs: j.saved_as, savedIn: j.audio_dir };
 }
 
 // ── status (persisted so the panel survives close/reopen) ───────────────────
@@ -281,10 +272,14 @@ function mkItem(o) {
 
 let processing = false;
 
-// Identity of a companion section, used to dedupe (so a double-click — or
+// Identity of a Story Studio section, used to dedupe (so a double-click — or
 // re-queuing an episode — can't add the same chapter twice and waste credits).
 function itemKey(it) {
   return it.episodeCode && it.sectionSlug ? `${it.episodeCode}::${it.sectionSlug}` : null;
+}
+
+function isStudioQueueItem(item) {
+  return !!(item?.slug && item.episodeCode && item.sectionSlug && (item.kind === 'intro' || item.kind === 'chapter'));
 }
 
 async function enqueue(items) {
@@ -304,6 +299,10 @@ async function enqueue(items) {
   let added = 0;
   let skipped = 0;
   for (const it of items) {
+    if (!isStudioQueueItem(it)) {
+      skipped++;
+      continue;
+    }
     const key = itemKey(it);
     if (key && active.has(key)) {
       skipped++;
@@ -331,7 +330,7 @@ async function removeFromQueue(id) {
 // Expand a whole project into queue items (done worker-side so the panel stays
 // snappy). One item per missing section (intro + chapters) of every episode
 // whose script is done but audio isn't.
-async function enqueueProject({ slug, target, voice, autoTag, provider, providerSettings }) {
+async function enqueueProject({ slug, voice, autoTag, provider, providerSettings }) {
   const settings = await getSettings();
   const ps = providerSettings || getProviderSettings(settings, provider);
   const client = new StudioClient(settings.studioBaseUrl);
@@ -348,7 +347,7 @@ async function enqueueProject({ slug, target, voice, autoTag, provider, provider
     } catch {
       continue;
     }
-    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', target, voice, autoTag, provider, providerSettings: ps })) {
+    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', voice, autoTag, provider, providerSettings: ps })) {
       items.push(it);
     }
   }
@@ -361,7 +360,7 @@ async function enqueueProject({ slug, target, voice, autoTag, provider, provider
 // chapter appears as several `_partN` names. Map each back to its section and
 // dedupe: two missing parts of Chapter 3 collapse to ONE `Chapter_03` job,
 // which regenerates the section and fills every missing part at once.
-function missingSectionItems(missingFiles, { slug, code, title, target, voice, autoTag, provider, providerSettings }) {
+function missingSectionItems(missingFiles, { slug, code, title, voice, autoTag, provider, providerSettings }) {
   const out = [];
   const seen = new Set();
   for (const f of missingFiles || []) {
@@ -381,15 +380,10 @@ function missingSectionItems(missingFiles, { slug, code, title, target, voice, a
         episodeTitle: title,
         sectionSlug: isIntro ? 'Introduction' : `Chapter_${numStr}`,
         chapterNumber: num,
-        target,
         provider,
         voice,
         autoTag,
         providerSettings,
-        // tokens for Downloads naming:
-        project: title,
-        chapterNum: numStr,
-        chapterLabel: isIntro ? 'Introduction' : `Chapter ${num}`,
         label: `${code} ${isIntro ? 'Introduction' : 'Ch ' + num}`,
       })
     );
@@ -398,7 +392,9 @@ function missingSectionItems(missingFiles, { slug, code, title, target, voice, a
 }
 
 async function fetchItemText(item, client) {
-  if (item.text) return item.text; // paste-mode items carry their own text
+  if (!item.slug || !item.episodeCode) {
+    throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
+  }
   if (item.kind === 'intro') {
     const sc = await client.scriptContent(item.slug, item.episodeCode, item.episodeTitle);
     return sc?.introduction?.content || '';
@@ -452,7 +448,6 @@ async function processQueue() {
           text,
           provider: item.provider,
           voice: item.voice,
-          target: item.target,
           autoTag: item.autoTag,
           slug: item.slug,
           episodeCode: item.episodeCode,
@@ -460,15 +455,6 @@ async function processQueue() {
           chapterNumber: item.chapterNumber,
           label: item.label,
         };
-        if (item.target !== 'project') {
-          job.downloadPath = buildDownloadPath(settings, {
-            project: item.project,
-            episodeCode: item.episodeCode,
-            episodeTitle: item.episodeTitle,
-            chapterNum: item.chapterNum,
-            chapterLabel: item.chapterLabel,
-          });
-        }
         const r = await generateAndSave(job, settings);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
@@ -518,8 +504,8 @@ async function processQueue() {
           }
           return; // stop this tick; the alarm (auto) or manual Resume continues it
         }
-        // Auto-retry (generation OR save/download failure) up to maxRetries
-        // before marking it failed — repairs a flaky download without user input.
+        // Auto-retry a generation or Studio ingest failure up to maxRetries
+        // before marking it failed.
         const maxRetries = Math.max(0, Number(settings.maxRetries) || 0);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);

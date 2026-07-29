@@ -4,17 +4,17 @@ A Chrome extension for turning Story Studio scripts into organized audio files.
 
 ## What It Does
 
-- Works with project scripts or pasted text.
+- Works with scripts from a connected Story Studio project.
 - Lets you choose the sections and voice settings for a batch.
 - Runs work through a persistent queue with progress, pause, retry, and recovery controls.
-- Saves finished audio to the connected project workspace or the browser Downloads folder.
+- Saves finished audio back to the connected project workspace.
 
 ## Workflow
 
-1. Open the side panel and connect a project, or paste content directly.
+1. Open the side panel and connect a Story Studio project.
 2. Select an episode, the sections to process, and the available voice settings.
 3. Queue the selected work and monitor its status in the active batch view.
-4. Let the extension save each completed file to the chosen destination.
+4. Let the extension save each completed file back to the project workspace.
 
 ## Availability
 
@@ -28,6 +28,5 @@ Audio generation uses a compatible signed-in browser session. Available voices a
 
 ## Notes
 
-- Project mode works with a running Story Studio workspace.
-- Paste mode works independently and saves to Downloads.
+- Requires a running Story Studio workspace.
 - The queue is designed to survive closing and reopening the side panel.

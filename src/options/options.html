@@ -23,52 +23,28 @@
       </select>
     </label>
 
-    <label>Mode
-      <select id="mode">
-        <option value="companion">Story Studio — project-connected workflow</option>
-        <option value="paste">Standalone — paste a script locally</option>
-      </select>
+    <label>Story Studio server URL
+      <input id="studioBaseUrl" placeholder="http://localhost:8677" />
     </label>
-
-    <div id="companionOpts">
-      <label>Story Studio server URL
-        <input id="studioBaseUrl" placeholder="http://localhost:8677" />
-      </label>
-      <p class="muted">Local studio (<code>localhost</code>) needs no login or
-        access grant. A remote / Tailscale server (e.g.
-        <code>http://mac-mini.tailXXXX.ts.net:8677</code>) needs both.</p>
-      <div class="row">
-        <button id="grantAccess">Grant access to this server</button>
-        <button id="testConnection">Test connection</button>
-      </div>
-      <p id="grantStatus" class="muted"></p>
-      <p id="testStatus" class="muted"></p>
-
-      <label>Username <span class="muted">(only for remote servers)</span>
-        <input id="studioUsername" autocomplete="off" placeholder="leave blank for localhost" />
-      </label>
-      <label>Password
-        <input id="studioPassword" type="password" autocomplete="off" placeholder="stored locally on this device" />
-      </label>
-
-      <label>Default save target
-        <select id="saveTarget">
-          <option value="project">Story Studio project folder (via server)</option>
-          <option value="download">Downloads folder</option>
-        </select>
-      </label>
-      <p class="muted">"Project folder" posts the audio back so it lands in the
-        episode's real audio folder and rebuilds <code>audio_chapters.json</code>.
-        Paste mode always uses Downloads.</p>
+    <p class="muted">Local studio (<code>localhost</code>) needs no login or
+      access grant. A remote / Tailscale server (e.g.
+      <code>http://mac-mini.tailXXXX.ts.net:8677</code>) needs both.</p>
+    <div class="row">
+      <button id="grantAccess">Grant access to this server</button>
+      <button id="testConnection">Test connection</button>
     </div>
+    <p id="grantStatus" class="muted"></p>
+    <p id="testStatus" class="muted"></p>
 
-    <label>Download subfolder (inside Downloads)
-      <input id="downloadSubdir" />
+    <label>Username <span class="muted">(only for remote servers)</span>
+      <input id="studioUsername" autocomplete="off" placeholder="leave blank for localhost" />
     </label>
-    <label>Filename template
-      <input id="filenameTemplate" />
+    <label>Password
+      <input id="studioPassword" type="password" autocomplete="off" placeholder="stored locally on this device" />
     </label>
-    <p class="muted">Tokens: <code>{project} {episodeCode} {chapterNum} {chapterLabel} {episodeTitle}</code></p>
+
+    <p class="muted">Finished audio is posted back to the connected Story Studio
+      project, where the workspace stores it with its normal episode naming.</p>
 
     <div class="row end">
       <span id="status" class="muted small"></span>

@@ -1,4 +1,4 @@
-// Companion-mode client for the Story Studio KH local server.
+// Client for the Story Studio KH local server.
 //
 // Story Studio runs an Express API. Two flavours, same routes:
 //   - Desktop app:  http://localhost:8000   (no auth)
