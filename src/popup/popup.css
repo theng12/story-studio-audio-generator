@@ -65,6 +65,18 @@ header {
   font-size: 11px;
 }
 .applied-settings:empty { display: none; }
+.workflow-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -2px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--divider);
+}
+.workflow-mode-label { color: var(--muted); font-size: 11px; }
+.workflow-mode-label strong { color: var(--fg); font-weight: 650; }
+.mode-switch { padding: 5px 8px; color: var(--link); font-size: 11px; }
 .activity-panel {
   margin: 0 0 14px;
   padding: 2px;
@@ -189,6 +201,11 @@ label.check { display: flex; align-items: center; gap: 6px; font-size: 12px; col
 label.check input { width: auto; margin: 0; }
 #queueEpisode, #queueProject { width: 100%; padding: 8px; }
 .hgroup { display: flex; align-items: center; gap: 8px; }
+.studio-connection { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.studio-connection-button { padding: 7px 10px; color: var(--fg); background: var(--surface); font-size: 12px; font-weight: 600; }
+.connection-status { min-width: 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connection-status.connected { color: var(--ok); }
+.connection-status.failed { color: var(--danger); }
 .batch-actions { margin-top: 12px; }
 .batch-actions .primary { margin-top: 0; }
 .batch-secondary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }

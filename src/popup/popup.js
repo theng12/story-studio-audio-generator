@@ -24,6 +24,8 @@ let liveStatus = null; // last persisted status (may carry a live countdown)
 let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
 let episodesByProject = {}; // slug -> [episode objects with .status]
 let currentSections = []; // [{ slug, kind, num, label, present }] for the section list
+let studioConnectionTest = null;
+const STUDIO_CONNECTION_TEST_KEY = 'studioConnectionTest';
 
 // An episode is worth showing when its script is done and (audio is missing, or
 // the user asked to also see already-done episodes for re-voicing).
@@ -39,6 +41,8 @@ async function init() {
   $('extensionVersion').title = `${manifest.name} v${manifest.version}`;
   initWhatsNew(manifest.version);
   settings = await getSettings();
+  renderModeControl();
+  $('switchMode').addEventListener('click', switchMode);
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openProviderPage').addEventListener('click', onOpenProviderPage);
   $('generate').addEventListener('click', onGenerate);
@@ -122,6 +126,7 @@ async function init() {
   setInterval(() => {
     tickCountdown();
     renderActivityElapsed();
+    renderConnectionStatus();
   }, 1000);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -144,6 +149,7 @@ async function init() {
 
   if (settings.mode === 'companion') {
     $('companionPane').hidden = false;
+    await restoreConnectionStatus();
     $('generate').hidden = true; // companion uses the multi-select "Queue selected"
     $('queueSelected').hidden = false;
     $('queueEpisode').hidden = false;
@@ -186,6 +192,23 @@ async function init() {
     );
     updatePreview();
   }
+}
+
+function renderModeControl() {
+  const studio = settings.mode !== 'paste';
+  $('modeName').textContent = studio ? 'Story Studio' : 'Standalone';
+  const switcher = $('switchMode');
+  switcher.textContent = studio ? 'Switch to Standalone' : 'Switch to Story Studio';
+  switcher.title = studio
+    ? 'Switch to Standalone for a locally pasted script'
+    : 'Switch to Story Studio for project-connected work';
+}
+
+async function switchMode() {
+  const switcher = $('switchMode');
+  switcher.disabled = true;
+  await persist({ mode: settings.mode === 'paste' ? 'companion' : 'paste' });
+  window.location.reload();
 }
 
 // Persist a settings patch and keep our local copy in sync.
@@ -1228,15 +1251,44 @@ function confirmDialog(title, body, okText = 'Queue') {
   });
 }
 
+function testedAtLabel(at) {
+  if (Date.now() - at < 60 * 1000) return 'tested just now';
+  return `tested ${new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(at)}`;
+}
+
+function renderConnectionStatus() {
+  const out = $('connStatus');
+  if (!out || !studioConnectionTest || studioConnectionTest.url !== settings?.studioBaseUrl) return;
+  const connected = studioConnectionTest.state === 'connected';
+  const text = `${connected ? 'Connected' : 'Failed'} · ${testedAtLabel(studioConnectionTest.at)}`;
+  out.textContent = text;
+  out.title = studioConnectionTest.detail || '';
+  out.setAttribute('aria-label', studioConnectionTest.detail ? `${text}. ${studioConnectionTest.detail}` : text);
+  out.classList.toggle('connected', connected);
+  out.classList.toggle('failed', !connected);
+}
+
+async function restoreConnectionStatus() {
+  const stored = await chrome.storage.session.get(STUDIO_CONNECTION_TEST_KEY);
+  studioConnectionTest = stored[STUDIO_CONNECTION_TEST_KEY] || null;
+  renderConnectionStatus();
+}
+
+async function recordConnectionTest(state, detail) {
+  studioConnectionTest = { state, detail, at: Date.now(), url: settings.studioBaseUrl };
+  await chrome.storage.session.set({ [STUDIO_CONNECTION_TEST_KEY]: studioConnectionTest });
+  renderConnectionStatus();
+}
+
 // Panel connection test — verifies the whole chain from where you work.
 async function testConnection() {
   const out = $('connStatus');
-  const set = (t, c) => {
-    out.textContent = t;
-    out.style.color = c;
-  };
-  $('testConn').disabled = true;
-  set('Testing…', 'var(--muted)');
+  const button = $('testConn');
+  button.disabled = true;
+  out.textContent = 'Testing…';
+  out.title = '';
+  out.removeAttribute('aria-label');
+  out.classList.remove('connected', 'failed');
   try {
     const url = settings.studioBaseUrl || '';
     const local = /localhost|127\.0\.0\.1/.test(url);
@@ -1250,19 +1302,19 @@ async function testConnection() {
       }
       const granted = pat ? await chrome.permissions.contains({ origins: [pat] }).catch(() => false) : false;
       if (!granted) {
-        set('✗ No host access — Settings → Grant access.', '#b00');
+        await recordConnectionTest('failed', 'No host access. Open Settings and grant access.');
         return;
       }
     }
     const projects = await client.listProjects();
     const n = Array.isArray(projects) ? projects.length : (projects.projects || []).length;
-    set(`✓ ${n} project${n !== 1 ? 's' : ''}`, '#0a7a0a');
+    await recordConnectionTest('connected', `${n} project${n !== 1 ? 's' : ''} available`);
     await loadCompanionData(); // refresh dropdowns now that we're reachable
   } catch (e) {
     const local = /localhost|127\.0\.0\.1/.test(settings.studioBaseUrl || '');
-    set(`✗ ${e.message}. ${local ? 'Running?' : 'Running, granted, logged in?'}`, '#b00');
+    await recordConnectionTest('failed', `${e.message}. ${local ? 'Running?' : 'Running, granted, logged in?'}`);
   } finally {
-    $('testConn').disabled = false;
+    button.disabled = false;
   }
 }
 

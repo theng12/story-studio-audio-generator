@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.12 - Working modes
+
+- Made Story Studio and Standalone workflows explicit in the side panel.
+- Added timestamped Studio connection results.
+
 ## 0.7.11 - Queue pacing
 
 - Combined human pacing and provider cooldown controls into one queue pacing section.

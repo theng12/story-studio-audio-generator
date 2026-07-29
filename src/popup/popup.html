@@ -22,6 +22,11 @@
 
     <div id="appliedSettings" class="applied-settings" aria-live="polite"></div>
 
+    <div class="workflow-mode" aria-label="Working mode">
+      <span class="workflow-mode-label">Mode <span aria-hidden="true">·</span> <strong id="modeName">Story Studio</strong></span>
+      <button id="switchMode" class="mode-switch" type="button" title="Switch to Standalone for a locally pasted script">Switch to Standalone</button>
+    </div>
+
     <section id="activityPanel" class="activity-panel" aria-live="polite">
       <div class="activity-inner">
         <div class="batch-head">
@@ -124,9 +129,9 @@
 
     <!-- Companion mode: pick from a running Story Studio server -->
     <section id="companionPane" hidden>
-      <div class="row between">
-        <button id="testConn" class="link">Test Studio connection</button>
-        <span id="connStatus" class="muted"></span>
+      <div class="studio-connection">
+        <button id="testConn" class="studio-connection-button" type="button">Test Studio connection</button>
+        <span id="connStatus" class="connection-status" role="status" aria-live="polite"></span>
       </div>
       <div class="form-grid form-grid-two">
         <label>Project

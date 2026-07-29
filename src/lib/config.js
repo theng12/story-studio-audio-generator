@@ -10,7 +10,7 @@
 // chrome.storage.sync and are edited on the Options page.
 
 export const DEFAULTS = {
-  mode: 'paste', // "companion" | "paste" — user picks on first run
+  mode: 'companion', // "companion" | "paste" — Story Studio is the default
   // UI color theme: 'light' | 'dark' | 'system' (follow the OS setting).
   theme: 'system',
   // Story Studio server. Default port 8766, but fully editable — set this to a
