@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.17 - Settings save action
+
+- Standardized Settings with the shared full-width primary Save action.
+
 ## 0.7.16 - Connection recovery and settings
 
 - A failed panel connection test now links directly to the Studio URL setting.
