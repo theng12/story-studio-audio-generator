@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.21 - Operational panel order
+
+- Aligned the side-panel workflow with Image Generator: Provider settings,
+  Generation workspace, Queue pacing, then Fleet Hub.
+- Added a quiet Fleet Hub “Coming soon” disclosure; Audio queue controls remain local.
+
 ## 0.7.20 - Connection recovery visibility
 
 - Hide the Update Studio URL recovery action while a fresh Studio connection

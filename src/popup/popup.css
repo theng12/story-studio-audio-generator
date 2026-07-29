@@ -243,7 +243,9 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding
 .advanced-panel summary::marker { content: ''; }
 .advanced-panel summary::after { content: '›'; margin-left: auto; color: var(--muted); font-size: 18px; line-height: 1; }
 .advanced-panel[open] summary::after { content: '⌄'; font-size: 16px; }
+.advanced-panel .summary-state { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 500; }
 .advanced-panel > .vs-card, .advanced-panel > .pace-card { margin: 0; border-width: 1px 0 0; border-radius: 0 0 var(--radius) var(--radius); }
+.advanced-panel > .context-card { margin: 0; padding: var(--space); border-top: 1px solid var(--divider); }
 .advanced-panel > .pace-card + .pace-card { margin-top: 0; }
 .operational-disclosure summary .pace-state { margin-left: auto; }
 .queue-pacing-card { padding: 0; }
