@@ -229,6 +229,12 @@ label.check input { width: auto; margin: 0; }
 }
 .operational-disclosure[open] summary::after { transform: rotate(225deg) translate(-2px, -2px); }
 .operational-disclosure summary .pace-state { margin-left: auto; }
+.queue-pacing-card { padding: 0; }
+.queue-pacing-section { padding: 10px; }
+.queue-pacing-section + .queue-pacing-section { border-top: 1px solid var(--divider); }
+.queue-pacing-section-heading { display: flex; align-items: center; gap: 8px; }
+.queue-pacing-section-heading .pace-state { margin-left: auto; }
+.queue-pacing-section #cooldownHint { margin: 10px 0 0; }
 .vs-head { margin-bottom: 4px; }
 .vs-model { margin-top: 4px; }
 .vs-row { margin-top: 8px; }

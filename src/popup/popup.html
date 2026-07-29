@@ -187,54 +187,54 @@
     </div>
 
     <details class="advanced-panel operational-disclosure">
-      <summary><span>Human pace</span><span id="humanPaceState" class="pace-state" aria-live="polite"></span></summary>
-      <section class="pace-card">
-      <div class="row between">
-        <span class="muted small">Human pace <span class="muted">· gap between generations</span></span>
-      </div>
-      <select id="humanPacePreset">
-        <option value="off">Off (no delay)</option>
-        <option value="quick">Quick (2–5s)</option>
-        <option value="balanced">Balanced (5–12s) — recommended</option>
-        <option value="cautious">Cautious (15–40s)</option>
-        <option value="custom">Custom</option>
-      </select>
-      <div id="humanPaceCustom" class="row pace-custom" hidden>
-        <label class="grow"><span class="mini">Min seconds</span>
-          <input id="humanPaceMin" type="number" min="0" max="3600" step="1" /></label>
-        <label class="grow"><span class="mini">Max seconds</span>
-          <input id="humanPaceMax" type="number" min="0" max="3600" step="1" /></label>
-      </div>
-      </section>
-    </details>
-
-    <details class="advanced-panel operational-disclosure">
-      <summary><span>Provider cooldown</span><span id="cooldownState" class="pace-state" aria-live="polite"></span></summary>
-      <section class="pace-card">
-      <div class="row between">
-        <span class="muted small">Provider cooldown <span class="muted" id="cooldownProviderName"></span></span>
-      </div>
-      <label class="check">
-        <input type="checkbox" id="cooldownAutoResume" />
-        Auto-resume after a detected limit
-      </label>
-      <div id="cooldownOpts" class="row pace-custom" hidden>
-        <label class="grow"><span class="mini">Cooldown before auto-resume</span>
-          <select id="cooldownPreset">
-            <option value="15">15 minutes</option>
-            <option value="30">30 minutes</option>
-            <option value="60">1 hour</option>
-            <option value="240">4 hours</option>
-            <option value="1440">24 hours</option>
+      <summary>Queue pacing</summary>
+      <section class="pace-card queue-pacing-card">
+        <div class="queue-pacing-section">
+          <div class="queue-pacing-section-heading">
+            <span class="muted small">Human pace <span class="muted">· gap between generations</span></span>
+            <span id="humanPaceState" class="pace-state" aria-live="polite"></span>
+          </div>
+          <select id="humanPacePreset">
+            <option value="off">Off (no delay)</option>
+            <option value="quick">Quick (2–5s)</option>
+            <option value="balanced">Balanced (5–12s) — recommended</option>
+            <option value="cautious">Cautious (15–40s)</option>
             <option value="custom">Custom</option>
           </select>
-        </label>
-      </div>
-      <div id="cooldownCustom" class="row pace-custom" hidden>
-        <label class="grow"><span class="mini">Custom minutes</span>
-          <input id="cooldownMinutes" type="number" min="1" max="1440" step="1" /></label>
-      </div>
-      <p class="muted" id="cooldownHint">Manual (default): a detected limit pauses the queue until you press Resume. Auto-resume: the queue waits the chosen time, then resumes on its own. You can press Resume any time to override.</p>
+          <div id="humanPaceCustom" class="row pace-custom" hidden>
+            <label class="grow"><span class="mini">Min seconds</span>
+              <input id="humanPaceMin" type="number" min="0" max="3600" step="1" /></label>
+            <label class="grow"><span class="mini">Max seconds</span>
+              <input id="humanPaceMax" type="number" min="0" max="3600" step="1" /></label>
+          </div>
+        </div>
+        <div class="queue-pacing-section">
+          <div class="queue-pacing-section-heading">
+            <span class="muted small">Provider cooldown <span class="muted" id="cooldownProviderName"></span></span>
+            <span id="cooldownState" class="pace-state" aria-live="polite"></span>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="cooldownAutoResume" />
+            Auto-resume after a detected limit
+          </label>
+          <div id="cooldownOpts" class="row pace-custom" hidden>
+            <label class="grow"><span class="mini">Cooldown before auto-resume</span>
+              <select id="cooldownPreset">
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="240">4 hours</option>
+                <option value="1440">24 hours</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+          </div>
+          <div id="cooldownCustom" class="row pace-custom" hidden>
+            <label class="grow"><span class="mini">Custom minutes</span>
+              <input id="cooldownMinutes" type="number" min="1" max="1440" step="1" /></label>
+          </div>
+          <p class="muted" id="cooldownHint">Manual (default): a detected limit pauses the queue until you press Resume. Auto-resume: the queue waits the chosen time, then resumes on its own. You can press Resume any time to override.</p>
+        </div>
       </section>
     </details>
 

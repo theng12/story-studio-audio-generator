@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.11 - Queue pacing
+
+- Combined human pacing and provider cooldown controls into one queue pacing section.
+
 ## 0.7.10 - Applied settings
 
 - Added a live header summary for pacing and the selected provider cooldown.
