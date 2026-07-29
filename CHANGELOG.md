@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.9 - Connection label
+
+- Clarified the Studio connection test action.
+
 ## 0.7.8 - Provider settings
 
 - Moved provider-specific voice controls directly below the primary setup row.
