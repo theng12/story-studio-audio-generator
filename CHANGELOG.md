@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.18 - Sky-blue product accent
+
+- Updated the Audio Generator's primary UI color and Chrome extension icon to
+  the shared sky-blue audio identity.
+
 ## 0.7.17 - Settings save action
 
 - Standardized Settings with the shared full-width primary Save action.
