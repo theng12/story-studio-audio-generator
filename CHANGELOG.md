@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.6 - Setup flow
+
+- Aligned the primary setup row as Provider, Voice, then Save to.
+
 ## 0.7.5 - Operational controls
 
 - Kept pacing and cooldown settings visible as compact expandable control rows.

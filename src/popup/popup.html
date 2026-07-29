@@ -57,7 +57,7 @@
       </div>
     </section>
 
-    <div class="form-grid form-grid-two">
+    <div class="form-grid form-grid-setup">
       <label>Provider
         <select id="provider">
           <option value="fish">fish.audio</option>
@@ -69,6 +69,12 @@
           <select id="voice"></select>
           <button id="loadVoices" title="Load voices from the provider" aria-label="Load voices">↻</button>
         </div>
+      </label>
+      <label id="saveTargetLabel">Save to
+        <select id="saveTarget">
+          <option value="project">Story Studio project folder</option>
+          <option value="download">Downloads folder</option>
+        </select>
       </label>
     </div>
     <p id="providerNote" class="muted"></p>
@@ -159,13 +165,6 @@
       <label class="check" id="vsSpeakerBoostRow"><input type="checkbox" id="vsSpeakerBoost" /> Speaker boost</label>
       </section>
     </details>
-
-    <label id="saveTargetLabel">Save to
-      <select id="saveTarget">
-        <option value="project">Story Studio project folder</option>
-        <option value="download">Downloads folder</option>
-      </select>
-    </label>
 
     <label class="check" id="autoTagLabel">
       <input type="checkbox" id="autoTag" />
