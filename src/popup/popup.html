@@ -48,10 +48,13 @@
             <span class="pending">◌ Pending</span><span class="running">◌ Running</span><span class="done">✓ Done</span><span class="failed">! Failed</span>
           </div>
         </div>
-        <div id="queueControls" class="queue-actions" hidden>
+        <div id="queueControls" class="queue-action-group">
+          <div class="queue-action-heading">Queue actions</div>
+          <div class="queue-action-buttons">
           <button id="pauseQueue" hidden>Pause</button>
-          <button id="retryFailed" hidden>Retry failed</button>
-          <button id="clearQueue" hidden>Clear pending</button>
+          <button id="retryFailed">↻ Retry failed</button>
+          <button id="clearQueue">× Clear pending</button>
+          </div>
         </div>
       </div>
     </section>

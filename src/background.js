@@ -559,9 +559,9 @@ async function processQueue() {
   }
 }
 
-// Drop everything not yet started; let an in-flight item finish on its own.
+// Drop only pending work; preserve active, completed, and failed history.
 async function clearQueue() {
-  const q = (await getQueue()).filter((i) => i.status === 'running');
+  const q = (await getQueue()).filter((i) => i.status !== 'pending');
   await setQueue(q);
   await writeStatus('Queue cleared.', 'info');
   return { ok: true };

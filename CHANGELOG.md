@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.23 - Queue actions
+
+- Kept the compact queue-action row visible and added a consistent Clear pending control.
+
 ## 0.7.22 - Standalone mode
 
 - Restored local-script audio generation with completed files saved to Downloads.

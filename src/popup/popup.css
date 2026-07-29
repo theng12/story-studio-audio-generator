@@ -303,14 +303,14 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding
 @keyframes gs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* Queue command center */
-.queue-actions {
-  display: flex;
-  gap: var(--space);
+.queue-action-group {
   margin-top: var(--space);
   padding-top: var(--space);
   border-top: 1px solid var(--divider);
 }
-.queue-actions button { flex: 1; min-width: 0; font-size: 12px; }
+.queue-action-heading { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.queue-action-buttons { display: flex; gap: var(--space); margin-top: 8px; }
+.queue-action-buttons button { flex: 1; min-width: 0; min-height: var(--compact-height); font-size: 12px; }
 #pauseQueue, #retryFailed { color: var(--link); }
 #clearQueue { color: var(--danger); }
 .queue-table-head { display: flex; justify-content: space-between; margin-top: var(--space); padding-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -377,7 +377,7 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding
 
 @media (max-width: 340px) {
   .form-grid-two, .batch-secondary { grid-template-columns: 1fr; }
-  .queue-actions { grid-template-columns: 1fr; }
+  .queue-action-buttons { flex-direction: column; }
   .activity-meta { white-space: normal; }
 }
 

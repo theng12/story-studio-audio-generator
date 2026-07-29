@@ -1082,15 +1082,13 @@ function renderQueueControls(queue, paused, coolingDown = false) {
   const active = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
   const pending = queue.filter((i) => i.status === 'pending').length;
   const retryable = queue.some((i) => i.status === 'failed' && WEB_PROVIDER[i.provider]);
-  const controls = $('queueControls');
   $('queueDetail').hidden = queue.length === 0;
   $('queueInfo').textContent = `Queue (${queue.length})`;
   const pause = $('pauseQueue');
   pause.hidden = active === 0; // pause/resume only matters while there's work
   pause.textContent = paused || coolingDown ? 'Resume' : 'Pause';
-  $('retryFailed').hidden = !retryable;
-  $('clearQueue').hidden = pending === 0;
-  controls.hidden = active === 0 && !retryable && pending === 0;
+  $('retryFailed').disabled = !retryable;
+  $('clearQueue').disabled = pending === 0;
 }
 
 function renderQueueList(queue) {
