@@ -56,6 +56,15 @@ header {
   justify-content: space-between;
   margin-bottom: 10px;
 }
+.applied-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.applied-settings:empty { display: none; }
 .activity-panel {
   margin: 0 0 14px;
   padding: 2px;

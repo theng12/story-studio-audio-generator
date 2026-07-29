@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.10 - Applied settings
+
+- Added a live header summary for pacing and the selected provider cooldown.
+
 ## 0.7.9 - Connection label
 
 - Clarified the Studio connection test action.

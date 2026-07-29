@@ -117,6 +117,7 @@ async function init() {
     liveStatus = lastStatus;
     applyLiveStatus();
     renderQueueUI();
+    renderAppliedSettings();
   }
   setInterval(() => {
     tickCountdown();
@@ -128,6 +129,7 @@ async function init() {
       liveStatus = changes.lastStatus.newValue || null;
       applyLiveStatus();
       renderQueueUI();
+      renderAppliedSettings();
     }
     if (changes.queuePaused) {
       queueState.paused = !!changes.queuePaused.newValue;
@@ -410,6 +412,7 @@ function renderCooldownState() {
   if (!cd.autoResume) {
     el.textContent = 'Manual';
     el.classList.add('off');
+    renderAppliedSettings();
     return;
   }
   el.classList.remove('off');
@@ -422,6 +425,32 @@ function renderCooldownState() {
   el.textContent = cooling
     ? `On cooldown · ${formatDuration(liveStatus.countdownUntil - Date.now())}`
     : `Auto-resume · ${cooldownMinutesLabel(cd.minutes)}`;
+  renderAppliedSettings();
+}
+
+// Compact operational summary below the header, independent of the batch card.
+function renderAppliedSettings() {
+  const el = $('appliedSettings');
+  if (!el || !settings) return;
+  const { min, max } = paceValues();
+  const provider = currentProvider();
+  const cooldown = providerCooldown(settings, provider);
+  const cooling =
+    liveStatus &&
+    liveStatus.countdownReason === 'cooldown' &&
+    liveStatus.countdownProvider === provider &&
+    Number.isFinite(liveStatus.countdownUntil) &&
+    liveStatus.countdownUntil > Date.now();
+  const cooldownText = cooling
+    ? `on cooldown ${formatDuration(liveStatus.countdownUntil - Date.now())}`
+    : cooldown.autoResume
+      ? `auto-resume ${cooldownMinutesLabel(cooldown.minutes)}`
+      : 'stops on limit';
+  const pace = document.createElement('span');
+  pace.textContent = `⚙ Pacing ${min}–${max}s`;
+  const cooldownState = document.createElement('span');
+  cooldownState.textContent = `${PROVIDER_LABEL[provider] || provider || 'Provider'} cooldown: ${cooldownText}`;
+  el.replaceChildren(pace, cooldownState);
 }
 
 async function saveProviderCooldown(patch) {
@@ -916,12 +945,14 @@ async function onPacePreset() {
   if (!p) return;
   await persist({ humanDelayMinSec: p.min, humanDelayMaxSec: p.max });
   renderHumanPace();
+  renderAppliedSettings();
 }
 async function onPaceCustom() {
   const min = Math.max(0, Math.min(3600, Math.round(Number($('humanPaceMin').value) || 0)));
   const max = Math.max(min, Math.min(3600, Math.round(Number($('humanPaceMax').value) || 0)));
   await persist({ humanDelayMinSec: min, humanDelayMaxSec: max });
   renderHumanPace();
+  renderAppliedSettings();
 }
 
 // ── Queue view (status bar + controls + list) ────────────────────────────────
