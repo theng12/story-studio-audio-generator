@@ -12,6 +12,9 @@
 .settings-page .settings-section label:first-of-type { margin-top: 0; }
 .settings-page .settings-section input,
 .settings-page .settings-section select { min-height: 38px; margin-top: 5px; border-radius: 8px; font-size: 14px; }
+.settings-page .settings-section label.checkbox { display: flex; align-items: center; gap: 8px; color: var(--fg); font-size: 13px; }
+.settings-page .settings-section label.checkbox input { width: auto; min-height: 0; margin: 0; }
+.settings-page .settings-section label.checkbox + .hint { margin-top: 6px; }
 .settings-page .settings-section .row { margin-top: 12px; }
 .settings-page .hint,
 .settings-page .connection-note { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }

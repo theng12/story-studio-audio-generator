@@ -2,7 +2,9 @@ import {
   getSettings,
   saveSettings,
   getCredentials,
+  getFleetPairingSecret,
   saveCredentials,
+  saveFleetPairingSecret,
   DEFAULTS,
 } from '../lib/config.js';
 import { StudioClient } from '../lib/story-studio.js';
@@ -12,7 +14,8 @@ const $ = (id) => document.getElementById(id);
 // Fields that have an input on THIS page. (The voice lives in the side panel,
 // not here — don't list fishVoice or $(f) is null and load() aborts before the
 // buttons are wired.)
-const FIELDS = ['theme', 'studioBaseUrl'];
+const FIELDS = ['theme', 'studioBaseUrl', 'fleetHubUrl', 'fleetAgentName'];
+const CHECKBOX_FIELDS = ['fleetAgentEnabled', 'fleetTelemetryDetails', 'fleetQueueControlEnabled'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
 
@@ -20,25 +23,33 @@ async function load() {
   await initTheme();
   const s = await getSettings();
   for (const f of FIELDS) if ($(f)) $(f).value = s[f] ?? DEFAULTS[f] ?? '';
+  for (const f of CHECKBOX_FIELDS) if ($(f)) $(f).checked = s[f] === true;
   // Apply the theme live as soon as it's changed (before the debounced save).
   $('theme').addEventListener('change', () => setTheme($('theme').value));
   const cred = await getCredentials();
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
+  $('fleetPairingSecret').value = await getFleetPairingSecret();
+  const { fleetStatus } = await chrome.storage.local.get('fleetStatus');
+  if (fleetStatus?.at) showFleetHealth(fleetStatus);
   $('save').addEventListener('click', save);
   $('login').addEventListener('click', login);
   $('grantAccess').addEventListener('click', grantAccess);
   $('testConnection').addEventListener('click', testConnection);
+  $('grantFleet').addEventListener('click', grantFleet);
+  $('testFleet').addEventListener('click', testFleet);
   $('studioBaseUrl').addEventListener('input', refreshGrantStatus);
+  $('fleetHubUrl').addEventListener('input', refreshFleetGrantStatus);
   refreshGrantStatus();
+  refreshFleetGrantStatus();
 
   // Auto-save every field as you edit — no "did it save?" doubt. The explicit
   // Save button stays as a belt-and-suspenders.
-  const allFields = [...FIELDS, 'studioUsername', 'studioPassword'];
+  const allFields = [...FIELDS, ...CHECKBOX_FIELDS, 'studioUsername', 'studioPassword', 'fleetPairingSecret'];
   for (const id of allFields) {
     const el = $(id);
     if (!el) continue;
-    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', autoSave);
+    el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', autoSave);
   }
 }
 
@@ -58,15 +69,20 @@ function showSaved(msg = '✓ Saved') {
   savedTimer = setTimeout(() => (el.textContent = ''), 2500);
 }
 
-async function save() {
+async function save({ refreshFleet = true } = {}) {
   try {
     const patch = {};
     for (const f of FIELDS) if ($(f)) patch[f] = $(f).value.trim();
+    for (const f of CHECKBOX_FIELDS) if ($(f)) patch[f] = $(f).checked;
     await saveSettings(patch);
+    await saveFleetPairingSecret($('fleetPairingSecret').value);
     await saveCredentials({
       username: $('studioUsername').value.trim(),
       password: $('studioPassword').value, // not trimmed — passwords may have spaces
     });
+    // Keep the background alarm in sync with the opt-in toggle. This only
+    // reports telemetry; it never opens a provider tab or starts queue work.
+    if (refreshFleet) chrome.runtime.sendMessage({ type: 'refreshFleetAgent' }).catch(() => {});
     showSaved();
   } catch (e) {
     // Never fail silently — a storage error must be visible, not look like
@@ -204,6 +220,95 @@ async function testConnection() {
     el.textContent = `✗ Not reachable: ${e.message}. ${tail}`;
     el.style.color = COLOR.err;
   }
+}
+
+async function refreshFleetGrantStatus() {
+  const el = $('fleetGrantStatus');
+  const btn = $('grantFleet');
+  const url = $('fleetHubUrl').value.trim();
+  const pat = originPattern(url);
+  if (!pat) {
+    el.textContent = '';
+    btn.disabled = false;
+    return;
+  }
+  if (isLocalUrl(url)) {
+    el.textContent = 'Local — no grant needed.';
+    el.style.color = COLOR.muted;
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = false;
+  const granted = await chrome.permissions.contains({ origins: [pat] }).catch(() => false);
+  el.textContent = granted ? '✓ Access granted' : 'Not granted — click to grant.';
+  el.style.color = granted ? COLOR.ok : COLOR.warn;
+}
+
+async function grantFleet() {
+  const url = $('fleetHubUrl').value.trim();
+  const pat = originPattern(url);
+  const el = $('fleetGrantStatus');
+  if (!pat) {
+    el.textContent = 'Enter a valid Hub URL first.';
+    el.style.color = COLOR.err;
+    return;
+  }
+  if (isLocalUrl(url)) return refreshFleetGrantStatus();
+  try {
+    const granted = await chrome.permissions.request({ origins: [pat] });
+    if (!granted) {
+      el.textContent = 'Permission declined.';
+      el.style.color = COLOR.err;
+      return;
+    }
+    el.textContent = '✓ Access granted.';
+    el.style.color = COLOR.ok;
+  } catch (error) {
+    el.textContent = `Grant failed: ${error.message || error}`;
+    el.style.color = COLOR.err;
+  }
+}
+
+async function testFleet() {
+  const status = $('fleetTestStatus');
+  const url = $('fleetHubUrl').value.trim();
+  status.textContent = 'Testing…';
+  status.style.color = COLOR.muted;
+  if (!url) {
+    status.textContent = 'Enter a Hub URL first.';
+    status.style.color = COLOR.err;
+    return;
+  }
+  if (!isLocalUrl(url)) {
+    const pat = originPattern(url);
+    if (!pat || !(await chrome.permissions.contains({ origins: [pat] }).catch(() => false))) {
+      status.textContent = 'Grant Hub access first.';
+      status.style.color = COLOR.warn;
+      return;
+    }
+  }
+  if (!$('fleetPairingSecret').value) {
+    status.textContent = 'Enter the local pairing secret first.';
+    status.style.color = COLOR.warn;
+    return;
+  }
+  try {
+    // The worker owns signing and verifies the response. Save first so the
+    // test uses exactly the displayed URL/secret without exposing either.
+    await save({ refreshFleet: false });
+    const result = await chrome.runtime.sendMessage({ type: 'testFleetConnection' });
+    if (!result?.ok) throw new Error(result?.error || 'No response from Fleet Hub.');
+    showFleetHealth({ ok: true, at: Date.now() });
+  } catch (error) {
+    showFleetHealth({ ok: false, at: Date.now(), error: error.message || error });
+  }
+}
+
+function showFleetHealth({ ok, at, error = '' }) {
+  const status = $('fleetTestStatus');
+  const when = Number.isFinite(Number(at)) ? new Date(Number(at)).toLocaleString() : 'just now';
+  status.textContent = ok ? `✓ Authenticated Fleet Hub connection (${when}).` : `✗ Fleet Hub unavailable (${when}): ${error}`;
+  status.style.color = ok ? COLOR.ok : COLOR.err;
 }
 
 document.addEventListener('DOMContentLoaded', load);

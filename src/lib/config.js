@@ -57,6 +57,14 @@ export const DEFAULTS = {
     fish: { autoResume: false, minutes: 15 },
     elevenlabs_web: { autoResume: false, minutes: 60 },
   },
+  // Fleet Hub is opt-in. The URL/name are syncable convenience settings, while
+  // the pairing secret and generated identity deliberately stay in local
+  // storage so another browser profile cannot silently become this agent.
+  fleetAgentEnabled: false,
+  fleetHubUrl: '',
+  fleetAgentName: '',
+  fleetTelemetryDetails: false,
+  fleetQueueControlEnabled: false,
 };
 
 // Defaults for the per-provider tuning controls. Both providers use logged-in
@@ -124,6 +132,7 @@ export async function saveSettings(patch) {
 // Story Studio login, stored in LOCAL storage (not synced across machines).
 // Only needed for a remote/tailnet server — localhost bypasses auth entirely.
 const CRED_KEY = 'studioCredentials';
+const FLEET_SECRET_KEY = 'fleetPairingSecret';
 
 export async function getCredentials() {
   const stored = await chrome.storage.local.get(CRED_KEY);
@@ -132,4 +141,15 @@ export async function getCredentials() {
 
 export async function saveCredentials({ username, password }) {
   await chrome.storage.local.set({ [CRED_KEY]: { username, password } });
+}
+
+// Fleet pairing material is intentionally local-only. It is never included in
+// sync settings, telemetry, or a command payload.
+export async function getFleetPairingSecret() {
+  const stored = await chrome.storage.local.get(FLEET_SECRET_KEY);
+  return typeof stored[FLEET_SECRET_KEY] === 'string' ? stored[FLEET_SECRET_KEY] : '';
+}
+
+export async function saveFleetPairingSecret(secret) {
+  await chrome.storage.local.set({ [FLEET_SECRET_KEY]: String(secret || '') });
 }

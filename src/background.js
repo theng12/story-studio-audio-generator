@@ -9,18 +9,29 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
+import { getFleetPairingSecret, getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { sectionSlugFromFile } from './lib/naming.js';
 import { PROVIDERS, buildElevenVoiceSettings } from './lib/providers.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
+const FLEET_ALARM = 'fleetHeartbeat';
+const FLEET_PATH = '/api/v2/agents/heartbeat';
+const FLEET_PROTOCOL_VERSION = 2;
+const FLEET_IDENTITY_KEY = 'fleetIdentity';
+const FLEET_REVISION_KEY = 'fleetQueueRevision';
+const FLEET_HUB_PAUSE_KEY = 'fleetHubPaused';
+const FLEET_RESPONSE_NONCES_KEY = 'fleetResponseNonces';
+const FLEET_COMMAND_RECEIPTS_KEY = 'fleetCommandReceipts';
+const FLEET_COMMAND_RESULTS_KEY = 'fleetCommandResults';
+const FLEET_STATUS_KEY = 'fleetStatus';
 // User-requested pause: the in-flight item finishes, then the loop stops until
 // Resume. Human-pace timing: when the next generation is allowed to start.
 const PAUSE_KEY = 'queuePaused';
 const NEXT_RUN_KEY = 'nextRunAt';
 const isPaused = async () => !!(await chrome.storage.local.get(PAUSE_KEY))[PAUSE_KEY];
+const isHubPaused = async () => !!(await chrome.storage.local.get(FLEET_HUB_PAUSE_KEY))[FLEET_HUB_PAUSE_KEY];
 
 // Per-provider cooldown, keyed by provider id -> resume-at timestamp (ms). Set
 // when a generation fails with `.limit` (a detected credit/quota/rate-limit
@@ -31,15 +42,15 @@ const getCooldowns = async () => (await chrome.storage.local.get(COOLDOWN_KEY))[
 async function setCooldownUntil(provider, resumeAt) {
   const map = await getCooldowns();
   map[provider] = resumeAt;
-  await chrome.storage.local.set({ [COOLDOWN_KEY]: map });
+  await writeFleetRevision({ [COOLDOWN_KEY]: map });
 }
 async function clearCooldown(provider) {
   const map = await getCooldowns();
   if (!(provider in map)) return;
   delete map[provider];
-  await chrome.storage.local.set({ [COOLDOWN_KEY]: map });
+  await writeFleetRevision({ [COOLDOWN_KEY]: map });
 }
-const clearAllCooldowns = () => chrome.storage.local.remove(COOLDOWN_KEY);
+const clearAllCooldowns = () => writeFleetRevision({ [COOLDOWN_KEY]: {} });
 
 // Small guards so a missing/disabled API can never break top-level evaluation
 // (which would stop the message listener from registering — symptom: every
@@ -271,8 +282,29 @@ async function getQueue() {
   const { queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
   return queue;
 }
+
+async function getFleetQueueRevision() {
+  const stored = await chrome.storage.local.get(FLEET_REVISION_KEY);
+  const revision = Number(stored[FLEET_REVISION_KEY]);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+}
+
+// Every local queue/control-state mutation advances one durable revision. Hub
+// commands carry the revision the operator saw, preventing a delayed command
+// from acting on newer local work after a restart or manual change.
+async function writeFleetRevision(values) {
+  const revision = await getFleetQueueRevision();
+  const nextRevision = revision >= Number.MAX_SAFE_INTEGER - 1 ? 1 : revision + 1;
+  await chrome.storage.local.set({ ...values, [FLEET_REVISION_KEY]: nextRevision });
+  return nextRevision;
+}
+
 async function setQueue(q) {
-  await chrome.storage.local.set({ [QUEUE_KEY]: q });
+  await writeFleetRevision({ [QUEUE_KEY]: q });
+}
+
+async function setQueuePaused(paused, { hub = false } = {}) {
+  await writeFleetRevision({ [PAUSE_KEY]: !!paused, [FLEET_HUB_PAUSE_KEY]: !!paused && !!hub });
 }
 
 let _seq = 0;
@@ -304,7 +336,8 @@ async function enqueue(items) {
   // new batch actually runs (pausing only ever applies to its own batch).
   if (!q.some((i) => i.status === 'pending' || i.status === 'running')) {
     q = [];
-    await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+    await setQueuePaused(false);
+    await chrome.storage.local.remove(NEXT_RUN_KEY);
   }
   // Don't re-add anything already pending/running.
   const active = new Set(
@@ -515,7 +548,7 @@ async function processQueue() {
             });
             alarmCreate();
           } else {
-            await chrome.storage.local.set({ [PAUSE_KEY]: true });
+            await setQueuePaused(true);
             const detail = e.message ? ` ${e.message}` : '';
             await writeStatus(`${name} limit reached — paused.${detail} Resume after it resets, or switch provider.`, 'info');
             alarmClear();
@@ -568,14 +601,15 @@ async function clearQueue() {
 }
 
 // Pause: the in-flight item finishes and saves, then the loop stops.
-async function pauseQueue() {
-  await chrome.storage.local.set({ [PAUSE_KEY]: true });
+async function pauseQueue({ hub = false } = {}) {
+  await setQueuePaused(true, { hub });
   await writeStatus(processing ? 'Pausing — finishing the current item first…' : 'Queue paused — press Resume to continue.', 'info');
   return { ok: true };
 }
 async function resumeQueue() {
   // Manual resume overrides every provider's cooldown, not just the pause flag.
-  await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
+  await setQueuePaused(false);
+  await chrome.storage.local.remove(NEXT_RUN_KEY);
   await clearAllCooldowns();
   alarmCreate();
   processQueue();
@@ -584,12 +618,28 @@ async function resumeQueue() {
 
 // Re-pend failed items so the queue picks them up again. `id` targets one row;
 // omit it to retry every failed item.
-async function retryFailed(id = null) {
+function isRemotelyRetryable(item) {
+  return !!(
+    item &&
+    item.status === 'failed' &&
+    PROVIDERS[item.provider] &&
+    !item.ambiguous &&
+    !item.requiresLocalReview
+  );
+}
+
+async function retryFailed(id = null, { remote = false, ids = null } = {}) {
   const q = await getQueue();
+  const selected = Array.isArray(ids) ? new Set(ids.filter((value) => typeof value === 'string')) : null;
   let retried = 0;
   for (const it of q) {
     if (it.status !== 'failed' || (id && it.id !== id)) continue;
+    if (selected && !selected.has(it.id)) continue;
     if (!PROVIDERS[it.provider]) continue;
+    // An uncertain provider submission must be resolved locally. The Audio
+    // queue currently produces only normal failed states, but preserving this
+    // guard keeps future ambiguous-job handling out of remote automation.
+    if (remote && !isRemotelyRetryable(it)) continue;
     it.status = 'pending';
     it.attempts = 0;
     delete it.error;
@@ -600,13 +650,323 @@ async function retryFailed(id = null) {
   }
   if (retried) {
     await setQueue(q);
-    await chrome.storage.local.remove([PAUSE_KEY, NEXT_RUN_KEY]);
-    await clearAllCooldowns();
+    if (!remote) {
+      await setQueuePaused(false);
+      await chrome.storage.local.remove(NEXT_RUN_KEY);
+      await clearAllCooldowns();
+    }
     await writeStatus(`Retrying ${retried} failed item${retried === 1 ? '' : 's'}…`, 'running');
     alarmCreate();
     processQueue();
   }
   return { ok: true, retried };
+}
+
+// ── Fleet Hub v2 adapter ───────────────────────────────────────────────────
+// The Hub is transport/control-plane only. It never creates a provider tab or
+// calls a provider: all work remains inside this durable sequential queue.
+const FLEET_SESSION_ID = makeFleetRandomId();
+let fleetHeartbeatInFlight = false;
+
+function makeFleetRandomId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function makeFleetNonce() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+}
+
+async function fleetHmacHex(secret, value) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function fleetCanonicalMessage(timestamp, nonce, bodyText) {
+  return `POST\n${FLEET_PATH}\n${timestamp}\n${nonce}\n${bodyText}`;
+}
+
+function fleetSafeEqual(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index++) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
+
+async function getFleetIdentity() {
+  const stored = await chrome.storage.local.get(FLEET_IDENTITY_KEY);
+  const saved = stored[FLEET_IDENTITY_KEY];
+  if (saved && typeof saved.agentId === 'string' && typeof saved.machineId === 'string') return saved;
+  // IDs are random local identifiers rather than editable machine names. This
+  // keeps the four generator extensions distinct even on one Mac.
+  const identity = { agentId: `audio:${makeFleetRandomId()}`, machineId: makeFleetRandomId() };
+  await chrome.storage.local.set({ [FLEET_IDENTITY_KEY]: identity });
+  return identity;
+}
+
+async function consumeFleetResponseNonce(nonce, timestamp) {
+  if (typeof nonce !== 'string' || nonce.length < 16 || nonce.length > 256) return false;
+  const now = Date.now();
+  const stored = await chrome.storage.local.get(FLEET_RESPONSE_NONCES_KEY);
+  const active = stored[FLEET_RESPONSE_NONCES_KEY] && typeof stored[FLEET_RESPONSE_NONCES_KEY] === 'object'
+    ? stored[FLEET_RESPONSE_NONCES_KEY]
+    : {};
+  for (const [key, expiresAt] of Object.entries(active)) if (!Number.isFinite(expiresAt) || expiresAt <= now) delete active[key];
+  if (active[nonce]) return false;
+  active[nonce] = Number(timestamp) + 60_000;
+  const bounded = Object.entries(active)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 128);
+  await chrome.storage.local.set({ [FLEET_RESPONSE_NONCES_KEY]: Object.fromEntries(bounded) });
+  return true;
+}
+
+async function verifyFleetResponse(response, bodyText, secret) {
+  const timestamp = response.headers.get('X-Fleet-Timestamp') || '';
+  const nonce = response.headers.get('X-Fleet-Nonce') || '';
+  const signature = response.headers.get('X-Fleet-Signature') || '';
+  const timestampMs = Number(timestamp);
+  if (!Number.isFinite(timestampMs) || Math.abs(Date.now() - timestampMs) > 60_000) return false;
+  const expected = await fleetHmacHex(secret, fleetCanonicalMessage(timestamp, nonce, bodyText));
+  if (!fleetSafeEqual(expected, signature)) return false;
+  return consumeFleetResponseNonce(nonce, timestampMs);
+}
+
+async function getFleetCommandRecords(key) {
+  const stored = await chrome.storage.local.get(key);
+  return stored[key] && typeof stored[key] === 'object' ? stored[key] : {};
+}
+
+async function recordFleetCommandResult(commandId, outcome, detail = '') {
+  const now = Date.now();
+  const revision = await getFleetQueueRevision();
+  const result = { commandId, outcome, detail: String(detail || '').slice(0, 300), queueRevision: revision, updatedAt: now };
+  const [receipts, results] = await Promise.all([
+    getFleetCommandRecords(FLEET_COMMAND_RECEIPTS_KEY),
+    getFleetCommandRecords(FLEET_COMMAND_RESULTS_KEY),
+  ]);
+  if (['succeeded', 'failed', 'rejected', 'expired'].includes(outcome)) receipts[commandId] = result;
+  results[commandId] = result;
+  const trim = (records) => Object.fromEntries(Object.entries(records).sort((a, b) => b[1].updatedAt - a[1].updatedAt).slice(0, 128));
+  await chrome.storage.local.set({
+    [FLEET_COMMAND_RECEIPTS_KEY]: trim(receipts),
+    [FLEET_COMMAND_RESULTS_KEY]: trim(results),
+  });
+  return result;
+}
+
+async function fleetCommandResults() {
+  const results = await getFleetCommandRecords(FLEET_COMMAND_RESULTS_KEY);
+  return Object.values(results)
+    .sort((a, b) => a.updatedAt - b.updatedAt)
+    .slice(-50)
+    .map(({ updatedAt, ...result }) => result);
+}
+
+function trimFleetText(value, max = 160) {
+  return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+}
+
+async function buildFleetHeartbeatBody(settings) {
+  const [identity, queue, paused, hubPaused, cooldowns, stored, revision, commandResults] = await Promise.all([
+    getFleetIdentity(),
+    getQueue(),
+    isPaused(),
+    isHubPaused(),
+    getCooldowns(),
+    chrome.storage.local.get('lastStatus'),
+    getFleetQueueRevision(),
+    fleetCommandResults(),
+  ]);
+  const counts = {
+    pending: queue.filter((item) => item.status === 'pending').length,
+    running: queue.filter((item) => item.status === 'running').length,
+    done: queue.filter((item) => item.status === 'done').length,
+    failed: queue.filter((item) => item.status === 'failed').length,
+  };
+  const currentItem = queue.find((item) => item.status === 'running') || null;
+  const nextItem = queue.find((item) => item.status === 'pending') || null;
+  const activeCooldowns = Object.entries(cooldowns)
+    .filter(([, until]) => Number(until) > Date.now())
+    .map(([provider, until]) => ({ provider: trimFleetText(provider, 40), until: Number(until) }));
+  const nextCooldown = activeCooldowns.find((entry) => entry.provider === (nextItem?.provider || settings.provider)) || null;
+  let state = 'idle';
+  if (paused) state = hubPaused ? 'hub_paused' : 'paused';
+  else if (nextCooldown) state = 'cooldown';
+  else if (counts.running) state = 'running';
+  else if (counts.pending) state = 'queued';
+
+  const detailed = settings.fleetTelemetryDetails === true;
+  const snapshot = {
+    queueRevision: revision,
+    state,
+    counts,
+    current: currentItem ? { id: currentItem.id, ...(detailed ? { label: trimFleetText(currentItem.label) } : {}) } : null,
+    cooldown: nextCooldown,
+    config: {
+      provider: trimFleetText(settings.provider, 40),
+      pacing: {
+        minSeconds: Math.max(0, Number(settings.humanDelayMinSec) || 0),
+        maxSeconds: Math.max(0, Number(settings.humanDelayMaxSec) || 0),
+      },
+    },
+    health: {
+      studioConfigured: !!String(settings.studioBaseUrl || '').trim(),
+      ...(detailed && stored.lastStatus ? { localStatus: trimFleetText(stored.lastStatus.text) } : {}),
+    },
+    ...(detailed
+      ? {
+          retryableFailedIds: queue.filter(isRemotelyRetryable).map((item) => item.id).slice(0, 50),
+          activeCooldowns,
+        }
+      : {}),
+  };
+  return {
+    protocolVersion: FLEET_PROTOCOL_VERSION,
+    agent: {
+      ...identity,
+      extensionType: 'audio',
+      sessionId: FLEET_SESSION_ID,
+      version: chrome.runtime.getManifest().version,
+      displayName: trimFleetText(settings.fleetAgentName, 80),
+      capabilities: { actions: ['pause_after_current', 'resume_hub_pause', 'clear_pending', 'retry_failed'] },
+      consent: { telemetry: settings.fleetAgentEnabled === true, queueControl: settings.fleetQueueControlEnabled === true },
+    },
+    snapshot,
+    commandResults,
+  };
+}
+
+function activeCooldownPresent(cooldowns) {
+  return Object.values(cooldowns || {}).some((until) => Number(until) > Date.now());
+}
+
+async function executeFleetCommand(command, settings) {
+  const commandId = typeof command?.commandId === 'string' ? command.commandId : typeof command?.id === 'string' ? command.id : '';
+  if (!commandId) return;
+  const identity = await getFleetIdentity();
+  if (command.targetAgentId !== identity.agentId) return recordFleetCommandResult(commandId, 'rejected', 'wrong_target_agent');
+  if (command.targetSessionId !== FLEET_SESSION_ID) return recordFleetCommandResult(commandId, 'rejected', 'wrong_target_session');
+  const now = Date.now();
+  const createdAt = Number(command.createdAt);
+  const expiresAt = Number(command.expiresAt);
+  if (
+    !Number.isFinite(createdAt) ||
+    !Number.isFinite(expiresAt) ||
+    createdAt > expiresAt ||
+    expiresAt - createdAt > 15 * 60_000 ||
+    createdAt > now + 60_000
+  ) {
+    return recordFleetCommandResult(commandId, 'rejected', 'invalid_command_window');
+  }
+  const receipts = await getFleetCommandRecords(FLEET_COMMAND_RECEIPTS_KEY);
+  if (receipts[commandId]) return; // durable terminal receipt: never run twice.
+  if (expiresAt <= now) return recordFleetCommandResult(commandId, 'expired', 'command_expired');
+  const expected = command.expectedQueueRevision;
+  const actual = await getFleetQueueRevision();
+  if (!Number.isSafeInteger(expected) || expected !== actual) return recordFleetCommandResult(commandId, 'rejected', 'queue_revision_mismatch');
+  if (settings.fleetQueueControlEnabled !== true) return recordFleetCommandResult(commandId, 'rejected', 'queue_control_not_consented');
+
+  await recordFleetCommandResult(commandId, 'accepted');
+  try {
+    switch (command.action) {
+      case 'pause_after_current':
+        if (await isPaused()) {
+          if (!(await isHubPaused())) return recordFleetCommandResult(commandId, 'rejected', 'locally_paused');
+        } else {
+          await pauseQueue({ hub: true });
+        }
+        break;
+      case 'resume_hub_pause': {
+        if (!(await isHubPaused())) return recordFleetCommandResult(commandId, 'rejected', 'not_hub_paused');
+        if (activeCooldownPresent(await getCooldowns())) return recordFleetCommandResult(commandId, 'rejected', 'cooldown_active');
+        await setQueuePaused(false);
+        alarmCreate();
+        processQueue();
+        break;
+      }
+      case 'clear_pending':
+        await clearQueue();
+        break;
+      case 'retry_failed': {
+        const itemIds = Array.isArray(command.payload?.itemIds) ? command.payload.itemIds : null;
+        if (!itemIds || !itemIds.length) return recordFleetCommandResult(commandId, 'rejected', 'retry_item_ids_required');
+        const result = await retryFailed(null, { remote: true, ids: itemIds });
+        if (!result.retried) return recordFleetCommandResult(commandId, 'rejected', 'no_retryable_failed_items');
+        break;
+      }
+      default:
+        return recordFleetCommandResult(commandId, 'rejected', 'unsupported_action');
+    }
+    return recordFleetCommandResult(commandId, 'succeeded');
+  } catch (error) {
+    return recordFleetCommandResult(commandId, 'failed', trimFleetText(error?.message || error, 240));
+  }
+}
+
+async function ensureFleetAlarm(settings = null) {
+  const configured = settings || await getSettings();
+  try {
+    if (configured.fleetAgentEnabled && String(configured.fleetHubUrl || '').trim()) {
+      chrome.alarms.create(FLEET_ALARM, { periodInMinutes: 0.5 });
+    } else {
+      chrome.alarms.clear(FLEET_ALARM);
+    }
+  } catch {
+    /* alarms unavailable — an active worker will still attempt a heartbeat */
+  }
+}
+
+async function fleetHeartbeat({ allowDisabled = false } = {}) {
+  if (fleetHeartbeatInFlight) return { ok: false, error: 'heartbeat_in_progress' };
+  fleetHeartbeatInFlight = true;
+  try {
+    const settings = await getSettings();
+    const hub = String(settings.fleetHubUrl || '').trim().replace(/\/+$/, '');
+    const secret = await getFleetPairingSecret();
+    await ensureFleetAlarm(settings);
+    if ((!settings.fleetAgentEnabled && !allowDisabled) || !hub || !secret) {
+      return { ok: false, error: !hub ? 'hub_url_required' : !secret ? 'pairing_secret_required' : 'fleet_disabled' };
+    }
+    const payload = await buildFleetHeartbeatBody(settings);
+    const bodyText = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const nonce = makeFleetNonce();
+    const signature = await fleetHmacHex(secret, fleetCanonicalMessage(timestamp, nonce, bodyText));
+    const response = await fetch(`${hub}${FLEET_PATH}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Fleet-Timestamp': timestamp,
+        'X-Fleet-Nonce': nonce,
+        'X-Fleet-Signature': signature,
+      },
+      body: bodyText,
+    });
+    const responseText = await response.text();
+    if (!response.ok) throw new Error(`Hub returned ${response.status}`);
+    if (!(await verifyFleetResponse(response, responseText, secret))) throw new Error('Hub response authentication failed');
+    const reply = JSON.parse(responseText || '{}');
+    if (reply.protocolVersion !== FLEET_PROTOCOL_VERSION) throw new Error('Hub protocol version mismatch');
+    await chrome.storage.local.set({ [FLEET_STATUS_KEY]: { ok: true, at: Date.now(), error: '' } });
+    // Commands are deliberately ignored until telemetry is explicitly enabled.
+    if (settings.fleetAgentEnabled) {
+      for (const command of Array.isArray(reply.commands) ? reply.commands : []) await executeFleetCommand(command, settings);
+    }
+    return { ok: true, commands: Array.isArray(reply.commands) ? reply.commands.length : 0 };
+  } catch (error) {
+    const message = trimFleetText(error?.message || error, 240);
+    await chrome.storage.local.set({ [FLEET_STATUS_KEY]: { ok: false, at: Date.now(), error: message } });
+    return { ok: false, error: message };
+  } finally {
+    fleetHeartbeatInFlight = false;
+  }
 }
 
 // Resume after a worker restart: re-pend any item that was mid-flight when the
@@ -640,8 +1000,20 @@ async function retryFailed(id = null) {
 })();
 
 chrome.alarms?.onAlarm?.addListener((a) => {
-  if (a.name === ALARM) processQueue();
+  if (a.name === ALARM) {
+    processQueue();
+    fleetHeartbeat();
+  } else if (a.name === FLEET_ALARM) {
+    fleetHeartbeat();
+  }
 });
+
+// MV3 workers are routinely suspended while idle. A durable alarm restores
+// idle telemetry without touching a provider tab or the local queue.
+getSettings().then((settings) => {
+  ensureFleetAlarm(settings);
+  if (settings.fleetAgentEnabled) fleetHeartbeat();
+}).catch(() => {});
 
 async function listVoices(providerId) {
   const p = PROVIDERS[providerId];
@@ -676,6 +1048,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     case 'retryFailed':
       reply(retryFailed(msg.id || null));
+      return true;
+    case 'testFleetConnection':
+      reply(fleetHeartbeat({ allowDisabled: true }));
+      return true;
+    case 'refreshFleetAgent':
+      reply(getSettings().then(async (settings) => {
+        await ensureFleetAlarm(settings);
+        return settings.fleetAgentEnabled ? fleetHeartbeat() : { ok: true, disabled: true };
+      }));
       return true;
     case 'getQueue':
       reply(getQueue().then(async (queue) => ({ ok: true, queue, paused: await isPaused() })));
