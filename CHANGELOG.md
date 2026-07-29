@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.22 - Standalone mode
+
+- Restored local-script audio generation with completed files saved to Downloads.
+
 ## 0.7.21 - Operational panel order
 
 - Aligned the side-panel workflow with Image Generator: Provider settings,

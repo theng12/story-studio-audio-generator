@@ -41,7 +41,9 @@ async function init() {
   $('extensionVersion').title = `${manifest.name} v${manifest.version}`;
   initWhatsNew(manifest.version);
   settings = await getSettings();
+  renderWorkingMode();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('workingMode').addEventListener('change', changeWorkingMode);
   $('openStudioSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openProviderPage').addEventListener('click', onOpenProviderPage);
   $('loadVoices').addEventListener('click', loadVoices);
@@ -137,6 +139,7 @@ async function init() {
   $('queueEpisode').addEventListener('click', onQueueEpisode);
   $('queueProject').addEventListener('click', onQueueProject);
   $('reloadSections').addEventListener('click', onReloadSections);
+  $('queueStandalone').addEventListener('click', onQueueStandalone);
   $('testConn').addEventListener('click', testConnection);
   $('selectAll').addEventListener('change', (e) => {
     $('sectionList')
@@ -160,6 +163,29 @@ async function init() {
     updateStudioHints();
     renderSections(); // re-render (enables/disables already-voiced rows) — no refetch
   });
+  if (!isStandaloneMode()) await initStudio();
+}
+
+function isStandaloneMode() {
+  return settings?.mode === 'standalone';
+}
+
+function renderWorkingMode() {
+  const standalone = isStandaloneMode();
+  $('workingMode').value = standalone ? 'standalone' : 'studio';
+  $('studioPane').hidden = standalone;
+  $('studioBatchActions').hidden = standalone;
+  $('standalonePane').hidden = !standalone;
+  $('standaloneBatchActions').hidden = !standalone;
+}
+
+async function changeWorkingMode() {
+  await persist({ mode: $('workingMode').value });
+  renderWorkingMode();
+  if (isStandaloneMode()) {
+    status('Standalone mode uses a local script and Downloads.');
+    return;
+  }
   await initStudio();
 }
 
@@ -816,6 +842,32 @@ async function onQueueSelected() {
   const items = sel.map(itemFromSection);
   const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
   status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
+}
+
+async function onQueueStandalone() {
+  const voice = $('voice').value;
+  if (!voice) return status('Pick a voice first (↻ to load).');
+  const text = $('standaloneText').value.trim();
+  if (!text) return status('Add script text first.');
+  const rawLabel = $('standaloneLabel').value.trim() || 'audio';
+  const safeLabel = rawLabel.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'audio';
+  const item = {
+    kind: 'paste',
+    text,
+    target: 'download',
+    downloadPath: `StoryStudioAudio/Standalone/${Date.now()}_${safeLabel}.mp3`,
+    provider: currentProvider(),
+    voice,
+    autoTag: $('autoTag').checked,
+    providerSettings: currentProviderSettings(),
+    label: rawLabel,
+    episodeCode: 'Standalone',
+  };
+  await persist(rememberVoice(voice));
+  const response = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
+  if (!response?.ok) return status(`Queue failed: ${response?.error || NORESP}`);
+  $('standaloneText').value = '';
+  status(response.added ? 'Queued standalone audio. It will save to Downloads.' : 'Matching audio is already queued.');
 }
 
 // Queue every missing section of EVERY eligible episode in the project. The

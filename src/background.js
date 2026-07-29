@@ -158,10 +158,20 @@ async function produceAudio(job, settings) {
   });
 }
 
-// Generate one Story Studio section's audio and ingest it into its project.
+// Generate one section's audio and save it to Story Studio or Downloads.
 async function generateAndSave(job, settings) {
   const { base64, mime } = await produceAudio(job, settings);
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
+  if (job.target === 'download') {
+    const filename = `${String(job.downloadPath || 'StoryStudioAudio/Standalone/audio.mp3').replace(/\.(mp3|wav)$/i, '')}.${ext}`;
+    const downloadId = await chrome.downloads.download({
+      url: `data:${mime};base64,${base64}`,
+      filename,
+      saveAs: false,
+      conflictAction: 'uniquify',
+    });
+    return { downloadId, savedAs: filename, target: 'download' };
+  }
   if (!job.slug || !job.episodeCode || !job.sectionSlug) {
     throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
   }
@@ -275,11 +285,15 @@ let processing = false;
 // Identity of a Story Studio section, used to dedupe (so a double-click — or
 // re-queuing an episode — can't add the same chapter twice and waste credits).
 function itemKey(it) {
+  if (it?.kind === 'paste' && it.text) return `paste::${it.label || ''}::${it.text}`;
   return it.episodeCode && it.sectionSlug ? `${it.episodeCode}::${it.sectionSlug}` : null;
 }
 
 function isStudioQueueItem(item) {
-  return !!(item?.slug && item.episodeCode && item.sectionSlug && (item.kind === 'intro' || item.kind === 'chapter'));
+  return !!(
+    (item?.kind === 'paste' && typeof item.text === 'string' && item.target === 'download') ||
+    (item?.slug && item.episodeCode && item.sectionSlug && (item.kind === 'intro' || item.kind === 'chapter'))
+  );
 }
 
 async function enqueue(items) {
@@ -392,6 +406,7 @@ function missingSectionItems(missingFiles, { slug, code, title, voice, autoTag, 
 }
 
 async function fetchItemText(item, client) {
+  if (item.text) return item.text;
   if (!item.slug || !item.episodeCode) {
     throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
   }
@@ -449,11 +464,14 @@ async function processQueue() {
           provider: item.provider,
           voice: item.voice,
           autoTag: item.autoTag,
+          providerSettings: item.providerSettings,
           slug: item.slug,
           episodeCode: item.episodeCode,
           sectionSlug: item.sectionSlug,
           chapterNumber: item.chapterNumber,
           label: item.label,
+          target: item.target || 'project',
+          downloadPath: item.downloadPath,
         };
         const r = await generateAndSave(job, settings);
         q = await getQueue();

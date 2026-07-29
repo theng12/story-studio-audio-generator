@@ -56,6 +56,13 @@
       </div>
     </section>
 
+    <label class="workflow-mode"><span>Mode</span>
+      <select id="workingMode" aria-label="Working mode">
+        <option value="studio">Story Studio</option>
+        <option value="standalone">Standalone</option>
+      </select>
+    </label>
+
     <div class="form-grid form-grid-setup">
       <label>Provider
         <select id="provider">
@@ -215,17 +222,30 @@
       <div id="sectionList" class="sectionlist"></div>
     </section>
 
+    <section id="standalonePane" hidden>
+      <label>Audio label
+        <input id="standaloneLabel" placeholder="Optional name" />
+      </label>
+      <label>Script text
+        <textarea id="standaloneText" rows="8" placeholder="Paste the narration you want to generate."></textarea>
+      </label>
+      <p class="muted">Uses this local script and saves the completed audio to Downloads.</p>
+    </section>
+
     <label class="check" id="autoTagLabel">
       <input type="checkbox" id="autoTag" />
       Auto-tag emotions &amp; pauses (Fish "Auto Tag All")
     </label>
 
-    <div class="batch-actions">
+    <div id="studioBatchActions" class="batch-actions">
       <button id="queueSelected" class="primary">Queue selected</button>
       <div class="batch-secondary">
         <button id="queueEpisode">Queue this episode</button>
         <button id="queueProject">Queue all pending</button>
       </div>
+    </div>
+    <div id="standaloneBatchActions" class="batch-actions" hidden>
+      <button id="queueStandalone" class="primary">Queue audio</button>
     </div>
 
     <p id="status" class="muted"></p>

@@ -4,6 +4,7 @@
 // chrome.storage.sync and are edited on the Options page.
 
 export const DEFAULTS = {
+  mode: 'studio',
   // UI color theme: 'light' | 'dark' | 'system' (follow the OS setting).
   theme: 'system',
   // Story Studio server. Default port 8766, but fully editable — set this to a
@@ -88,10 +89,7 @@ const STORAGE_KEY = 'settings';
 function migrateLegacySettings(settings) {
   if (!settings) return settings;
   const next = { ...settings };
-  delete next.mode;
-  delete next.saveTarget;
-  delete next.downloadSubdir;
-  delete next.filenameTemplate;
+  if (!['studio', 'standalone'].includes(next.mode)) next.mode = DEFAULTS.mode;
   if (next.provider === 'elevenlabs') next.provider = 'elevenlabs_web';
   if (next.provider === 'openai') next.provider = 'fish';
   if (next.voiceByProvider?.elevenlabs && !next.voiceByProvider.elevenlabs_web) {
