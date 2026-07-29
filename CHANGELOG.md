@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.15 - Panel consistency
+
+- Standardized the side-panel toolbar, disclosures, control sizing, action hierarchy, and queue activity treatment.
+
 ## 0.7.14 - Story Studio workflow
 
 - Removed the standalone pasted-script workflow and browser-download output. Audio generation now starts from and returns to Story Studio projects only.

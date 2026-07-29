@@ -9,11 +9,8 @@
     <script src="../lib/theme-preload.js"></script>
   </head>
   <body>
-    <header>
-      <div class="header-brand">
-        <h1>Story Studio Audio Generator</h1>
-        <span id="extensionVersion" class="version-badge" title="Installed extension version"></span>
-      </div>
+    <header class="panel-toolbar">
+      <span id="extensionVersion" class="version-badge" title="Installed extension version"></span>
       <div class="header-actions">
         <button id="whatsNew" class="link small whats-new" title="What changed recently">✨ What's new<span id="whatsNewDot" class="ndot" hidden></span></button>
         <button id="openOptions" class="link settings-gear" title="Open settings" aria-label="Open settings">⚙</button>
@@ -75,7 +72,7 @@
     </div>
     <p id="providerNote" class="muted"></p>
     <div class="row end open-provider-row">
-      <button id="openProviderPage" class="provider-open-button" type="button" title="Open workspace in a tab" hidden>↗ Open workspace</button>
+      <button id="openProviderPage" class="workspace-action" type="button" title="Open workspace in a tab" hidden>↗ Open workspace</button>
     </div>
 
     <!-- Provider / model-specific voice tuning -->
@@ -119,8 +116,8 @@
     <!-- Pick from a running Story Studio server -->
     <section id="studioPane">
       <div class="studio-connection">
-        <button id="testConn" class="studio-connection-button" type="button">Test Studio connection</button>
         <span id="connStatus" class="connection-status" role="status" aria-live="polite"></span>
+        <button id="testConn" class="workspace-action" type="button">Test Studio connection</button>
       </div>
       <div class="form-grid form-grid-two">
         <label>Project
