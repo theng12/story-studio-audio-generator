@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.24 - Standalone batch review
+
+- Added a paste, review, and approval flow for standalone audio scripts.
+- Separate narration scripts with a `---` line while preserving multi-paragraph scripts.
+
 ## 0.7.23 - Queue actions
 
 - Kept the compact queue-action row visible and added a consistent Clear pending control.

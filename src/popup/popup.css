@@ -137,6 +137,16 @@ h1 { font-size: 16px; margin: 0; }
 .workflow-mode select { width: auto; min-width: 144px; margin: 0; }
 #standalonePane { display: grid; gap: var(--space); }
 #standalonePane .muted { margin: 0; }
+.standalone-editor { display: grid; gap: var(--space); }
+.standalone-editor label { margin-top: 0; }
+.standalone-editor textarea { min-height: 168px; }
+.standalone-editor code { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.standalone-review { display: grid; gap: var(--space); }
+.review-heading { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600; }
+.review-list { max-height: 252px; margin: 0; padding: 0; overflow-y: auto; list-style: none; border-top: 1px solid var(--divider); }
+.review-list li { overflow: hidden; padding: 9px 2px; border-bottom: 1px solid var(--divider); text-overflow: ellipsis; white-space: nowrap; }
+.review-actions { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr); gap: var(--space); }
+.review-actions .primary { margin-top: 0; }
 .workspace-action {
   min-height: var(--compact-height);
   padding: 0 10px;

@@ -226,13 +226,24 @@
     </section>
 
     <section id="standalonePane" hidden>
-      <label>Audio label
-        <input id="standaloneLabel" placeholder="Optional name" />
-      </label>
-      <label>Script text
-        <textarea id="standaloneText" rows="8" placeholder="Paste the narration you want to generate."></textarea>
-      </label>
-      <p class="muted">Uses this local script and saves the completed audio to Downloads.</p>
+      <div id="standaloneEditor" class="standalone-editor">
+        <label>Audio label
+          <input id="standaloneLabel" placeholder="Optional name" />
+        </label>
+        <label>Audio scripts
+          <textarea id="standaloneText" rows="10" placeholder="Paste one script, or separate several scripts with a line containing ---"></textarea>
+        </label>
+        <p class="muted">Use <code>---</code> on its own line between scripts. Paragraphs within a script stay together.</p>
+        <button id="reviewStandalone" class="primary" type="button">Review scripts</button>
+      </div>
+      <div id="standaloneReview" class="standalone-review" hidden>
+        <div class="review-heading"><span>Ready to queue</span><span id="standaloneReviewCount" class="summary-state"></span></div>
+        <ol id="standaloneReviewList" class="review-list"></ol>
+        <div class="review-actions">
+          <button id="editStandalone" type="button">Edit scripts</button>
+          <button id="queueStandalone" class="primary" type="button">Queue audio</button>
+        </div>
+      </div>
     </section>
 
     <label class="check" id="autoTagLabel">
@@ -247,10 +258,6 @@
         <button id="queueProject">Queue all pending</button>
       </div>
     </div>
-    <div id="standaloneBatchActions" class="batch-actions" hidden>
-      <button id="queueStandalone" class="primary">Queue audio</button>
-    </div>
-
     <p id="status" class="muted"></p>
 
     <!-- What's new — renders CHANGELOG.md packaged with the extension -->

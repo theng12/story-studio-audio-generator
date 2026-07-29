@@ -26,6 +26,7 @@ let episodesByProject = {}; // slug -> [episode objects with .status]
 let currentSections = []; // [{ slug, kind, num, label, present }] for the section list
 let studioConnectionTest = null;
 const STUDIO_CONNECTION_TEST_KEY = 'studioConnectionTest';
+let standaloneScripts = [];
 
 // An episode is worth showing when its script is done and (audio is missing, or
 // the user asked to also see already-done episodes for re-voicing).
@@ -139,7 +140,12 @@ async function init() {
   $('queueEpisode').addEventListener('click', onQueueEpisode);
   $('queueProject').addEventListener('click', onQueueProject);
   $('reloadSections').addEventListener('click', onReloadSections);
+  $('reviewStandalone').addEventListener('click', reviewStandaloneScripts);
+  $('editStandalone').addEventListener('click', showStandaloneEditor);
   $('queueStandalone').addEventListener('click', onQueueStandalone);
+  $('standaloneText').addEventListener('input', () => {
+    if (standaloneScripts.length) showStandaloneEditor();
+  });
   $('testConn').addEventListener('click', testConnection);
   $('selectAll').addEventListener('change', (e) => {
     $('sectionList')
@@ -176,7 +182,6 @@ function renderWorkingMode() {
   $('studioPane').hidden = standalone;
   $('studioBatchActions').hidden = standalone;
   $('standalonePane').hidden = !standalone;
-  $('standaloneBatchActions').hidden = !standalone;
 }
 
 async function changeWorkingMode() {
@@ -844,30 +849,64 @@ async function onQueueSelected() {
   status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
 }
 
+function parseStandaloneScripts(value) {
+  return String(value || '')
+    .split(/\r?\n\s*---\s*(?:\r?\n|$)/)
+    .map((script) => script.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+}
+
+function showStandaloneEditor() {
+  $('standaloneEditor').hidden = false;
+  $('standaloneReview').hidden = true;
+}
+
+function reviewStandaloneScripts() {
+  const scripts = parseStandaloneScripts($('standaloneText').value);
+  if (!scripts.length) return status('Add at least one script first.');
+  standaloneScripts = scripts;
+  $('standaloneReviewCount').textContent = `${scripts.length} script${scripts.length === 1 ? '' : 's'}`;
+  $('standaloneReviewList').replaceChildren(
+    ...scripts.map((script, index) => {
+      const item = document.createElement('li');
+      const preview = script.split(/\r?\n/).find((line) => line.trim())?.trim() || `Script ${index + 1}`;
+      item.textContent = `${index + 1}. ${preview}`;
+      item.title = script;
+      return item;
+    })
+  );
+  $('standaloneEditor').hidden = true;
+  $('standaloneReview').hidden = false;
+  status(`Review ${scripts.length} script${scripts.length === 1 ? '' : 's'} before queueing.`);
+}
+
 async function onQueueStandalone() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
-  const text = $('standaloneText').value.trim();
-  if (!text) return status('Add script text first.');
+  if (!standaloneScripts.length) return status('Review the scripts before queueing.');
   const rawLabel = $('standaloneLabel').value.trim() || 'audio';
   const safeLabel = rawLabel.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'audio';
-  const item = {
+  const stamp = Date.now();
+  const items = standaloneScripts.map((text, index) => ({
     kind: 'paste',
     text,
     target: 'download',
-    downloadPath: `StoryStudioAudio/Standalone/${Date.now()}_${safeLabel}.mp3`,
+    downloadPath: `StoryStudioAudio/Standalone/${stamp}_${pad(index + 1)}_${safeLabel}.mp3`,
     provider: currentProvider(),
     voice,
     autoTag: $('autoTag').checked,
     providerSettings: currentProviderSettings(),
-    label: rawLabel,
+    label: standaloneScripts.length > 1 ? `${rawLabel} ${index + 1}` : rawLabel,
     episodeCode: 'Standalone',
-  };
+  }));
   await persist(rememberVoice(voice));
-  const response = await chrome.runtime.sendMessage({ type: 'enqueue', items: [item] });
+  const response = await chrome.runtime.sendMessage({ type: 'enqueue', items });
   if (!response?.ok) return status(`Queue failed: ${response?.error || NORESP}`);
   $('standaloneText').value = '';
-  status(response.added ? 'Queued standalone audio. It will save to Downloads.' : 'Matching audio is already queued.');
+  standaloneScripts = [];
+  showStandaloneEditor();
+  status(response.added ? `Queued ${response.added} standalone audio file${response.added === 1 ? '' : 's'} for Downloads${skipNote(response)}.` : 'Matching audio is already queued.');
 }
 
 // Queue every missing section of EVERY eligible episode in the project. The
