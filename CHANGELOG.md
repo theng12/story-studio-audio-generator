@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.20 - Connection recovery visibility
+
+- Hide the Update Studio URL recovery action while a fresh Studio connection
+  test is in progress; it reappears only if that test fails.
+
 ## 0.7.19 - Connection-card consistency
 
 - Added the missing remote-server Sign in action and standardized connection

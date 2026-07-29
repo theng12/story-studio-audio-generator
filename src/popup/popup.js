@@ -1215,6 +1215,7 @@ async function testConnection() {
   const out = $('connStatus');
   const button = $('testConn');
   button.disabled = true;
+  $('openStudioSettings').hidden = true;
   out.textContent = 'Testing…';
   out.title = '';
   out.removeAttribute('aria-label');
