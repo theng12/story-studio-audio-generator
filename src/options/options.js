@@ -26,6 +26,7 @@ async function load() {
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
   $('save').addEventListener('click', save);
+  $('login').addEventListener('click', login);
   $('grantAccess').addEventListener('click', grantAccess);
   $('testConnection').addEventListener('click', testConnection);
   $('studioBaseUrl').addEventListener('input', refreshGrantStatus);
@@ -74,6 +75,29 @@ async function save() {
     el.textContent = `Couldn't save: ${e.message || e}`;
     el.style.color = COLOR.err;
     el.style.fontWeight = '600';
+  }
+}
+
+async function login() {
+  const status = $('loginStatus');
+  const url = $('studioBaseUrl').value.trim();
+  const username = $('studioUsername').value.trim();
+  const password = $('studioPassword').value;
+  status.textContent = 'Signing in…';
+  status.style.color = COLOR.muted;
+  if (!url) {
+    status.textContent = 'Enter a Server URL first.';
+    status.style.color = COLOR.err;
+    return;
+  }
+  try {
+    await saveCredentials({ username, password });
+    await new StudioClient(url).login(username, password);
+    status.textContent = '✓ Signed in — this browser session is ready.';
+    status.style.color = COLOR.ok;
+  } catch (error) {
+    status.textContent = `Sign-in failed: ${error.message}`;
+    status.style.color = COLOR.err;
   }
 }
 

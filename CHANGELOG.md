@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.19 - Connection-card consistency
+
+- Added the missing remote-server Sign in action and standardized connection
+  guidance, spacing, status feedback, and credentials layout.
+
 ## 0.7.18 - Sky-blue product accent
 
 - Updated the Audio Generator's primary UI color and Chrome extension icon to
