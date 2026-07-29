@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.8 - Provider settings
+
+- Moved provider-specific voice controls directly below the primary setup row.
+
 ## 0.7.7 - Cooldown controls
 
 - Standardized cooldown labels, presets, and manual versus auto-resume guidance.

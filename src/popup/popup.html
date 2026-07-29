@@ -82,6 +82,44 @@
       <button id="openProviderPage" class="link small" title="Open this provider's page in a tab" hidden>↗ Open provider</button>
     </div>
 
+    <!-- Provider / model-specific voice tuning -->
+    <details id="voiceSettings" class="advanced-panel" hidden>
+      <summary>Provider settings</summary>
+      <section class="vs-card">
+      <div class="row between vs-head">
+        <span class="muted small">Voice settings</span>
+        <button id="vsReset" class="link small" title="Reset to defaults">Reset</button>
+      </div>
+
+      <label id="vsModelRow" class="vs-model">Model
+        <select id="vsModel"></select>
+      </label>
+
+      <div id="vsStabilityRow" class="vs-row">
+        <div class="row between"><span class="mini">Stability</span><span id="vsStabilityVal" class="mini"></span></div>
+        <input id="vsStability" type="range" min="0" max="1" step="0.05" />
+        <select id="vsStabilityMode" hidden></select>
+      </div>
+
+      <div id="vsSimilarityRow" class="vs-row">
+        <div class="row between"><span class="mini">Similarity</span><span id="vsSimilarityVal" class="mini"></span></div>
+        <input id="vsSimilarity" type="range" min="0" max="1" step="0.05" />
+      </div>
+
+      <div id="vsStyleRow" class="vs-row">
+        <div class="row between"><span class="mini">Style exaggeration</span><span id="vsStyleVal" class="mini"></span></div>
+        <input id="vsStyle" type="range" min="0" max="1" step="0.05" />
+      </div>
+
+      <div id="vsSpeedRow" class="vs-row">
+        <div class="row between"><span class="mini">Speed</span><span id="vsSpeedVal" class="mini"></span></div>
+        <input id="vsSpeed" type="range" min="0.7" max="1.2" step="0.05" />
+      </div>
+
+      <label class="check" id="vsSpeakerBoostRow"><input type="checkbox" id="vsSpeakerBoost" /> Speaker boost</label>
+      </section>
+    </details>
+
     <!-- Companion mode: pick from a running Story Studio server -->
     <section id="companionPane" hidden>
       <div class="row between">
@@ -127,44 +165,6 @@
         <textarea id="pasteText" rows="8" placeholder="Paste the narration here…"></textarea>
       </label>
     </section>
-
-    <!-- Provider / model-specific voice tuning -->
-    <details id="voiceSettings" class="advanced-panel" hidden>
-      <summary>Voice tuning</summary>
-      <section class="vs-card">
-      <div class="row between vs-head">
-        <span class="muted small">Voice settings</span>
-        <button id="vsReset" class="link small" title="Reset to defaults">Reset</button>
-      </div>
-
-      <label id="vsModelRow" class="vs-model">Model
-        <select id="vsModel"></select>
-      </label>
-
-      <div id="vsStabilityRow" class="vs-row">
-        <div class="row between"><span class="mini">Stability</span><span id="vsStabilityVal" class="mini"></span></div>
-        <input id="vsStability" type="range" min="0" max="1" step="0.05" />
-        <select id="vsStabilityMode" hidden></select>
-      </div>
-
-      <div id="vsSimilarityRow" class="vs-row">
-        <div class="row between"><span class="mini">Similarity</span><span id="vsSimilarityVal" class="mini"></span></div>
-        <input id="vsSimilarity" type="range" min="0" max="1" step="0.05" />
-      </div>
-
-      <div id="vsStyleRow" class="vs-row">
-        <div class="row between"><span class="mini">Style exaggeration</span><span id="vsStyleVal" class="mini"></span></div>
-        <input id="vsStyle" type="range" min="0" max="1" step="0.05" />
-      </div>
-
-      <div id="vsSpeedRow" class="vs-row">
-        <div class="row between"><span class="mini">Speed</span><span id="vsSpeedVal" class="mini"></span></div>
-        <input id="vsSpeed" type="range" min="0.7" max="1.2" step="0.05" />
-      </div>
-
-      <label class="check" id="vsSpeakerBoostRow"><input type="checkbox" id="vsSpeakerBoost" /> Speaker boost</label>
-      </section>
-    </details>
 
     <label class="check" id="autoTagLabel">
       <input type="checkbox" id="autoTag" />
