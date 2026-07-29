@@ -214,10 +214,10 @@
       </div>
       <label class="check">
         <input type="checkbox" id="cooldownAutoResume" />
-        Auto-resume after a limit is hit
+        Auto-resume after a detected limit
       </label>
       <div id="cooldownOpts" class="row pace-custom" hidden>
-        <label class="grow"><span class="mini">Wait before retrying</span>
+        <label class="grow"><span class="mini">Cooldown before auto-resume</span>
           <select id="cooldownPreset">
             <option value="15">15 minutes</option>
             <option value="30">30 minutes</option>
@@ -232,7 +232,7 @@
         <label class="grow"><span class="mini">Custom minutes</span>
           <input id="cooldownMinutes" type="number" min="1" max="1440" step="1" /></label>
       </div>
-      <p class="muted" id="cooldownHint">Off (default): a detected limit pauses the whole queue — press Resume yourself once it resets. On: the queue waits the time above and retries on its own (self-correcting — still limited, it waits again). Ordinary failures keep auto-retrying as before either way.</p>
+      <p class="muted" id="cooldownHint">Manual (default): a detected limit pauses the queue until you press Resume. Auto-resume: the queue waits the chosen time, then resumes on its own. You can press Resume any time to override.</p>
       </section>
     </details>
 

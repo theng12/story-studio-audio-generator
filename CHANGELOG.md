@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.7 - Cooldown controls
+
+- Standardized cooldown labels, presets, and manual versus auto-resume guidance.
+
 ## 0.7.6 - Setup flow
 
 - Aligned the primary setup row as Provider, Voice, then Save to.
