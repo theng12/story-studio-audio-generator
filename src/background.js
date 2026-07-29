@@ -9,10 +9,10 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getSettings, getApiKeys, getProviderSettings, providerCooldown } from './lib/config.js';
+import { getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { buildDownloadPath, sectionSlugFromFile } from './lib/naming.js';
-import { PROVIDERS, listVoices as listApiVoices, generate as apiGenerate, buildElevenVoiceSettings } from './lib/providers.js';
+import { PROVIDERS, buildElevenVoiceSettings } from './lib/providers.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -93,9 +93,7 @@ async function findProviderTab(p) {
 // "↗ Open provider" button (never as a side effect of switching provider).
 async function openProviderPage(providerId) {
   const p = PROVIDERS[providerId];
-  if (!p || p.type !== 'webSession') {
-    return { ok: false, error: 'This provider needs no page — it calls the API directly with your key.' };
-  }
+  if (!p) return { ok: false, error: 'This provider is no longer supported.' };
   const tabs = await chrome.tabs.query({ url: p.origin });
   if (tabs[0]) {
     await chrome.tabs.update(tabs[0].id, { active: true });
@@ -133,38 +131,31 @@ async function send(tabId, message) {
   return res;
 }
 
-// Produce audio bytes for a job, routed by provider:
-//   - webSession (fish.audio): drive the page's content script.
-//   - apiKey (ElevenLabs, OpenAI): call the official API with the stored key.
-// Returns { base64, mime }.
+// Produce audio bytes by driving the provider's logged-in page.
 async function produceAudio(job, settings) {
   const providerId = job.provider || settings.provider || 'fish';
-  const p = PROVIDERS[providerId] || PROVIDERS.fish;
+  const p = PROVIDERS[providerId];
+  if (!p) throw new Error('This queued provider is no longer supported. Re-queue it with fish.audio or ElevenLabs.');
   if (!job.text || !job.text.trim()) throw new Error('No script text to generate.');
 
   // Per-provider tuning (model + voice settings / speed): the item's snapshot
   // from when it was queued, or the current settings for a fresh call.
   const ps = job.providerSettings || getProviderSettings(settings, providerId);
 
-  if (p.type === 'webSession') {
-    const voice = job.voice || settings.voiceByProvider?.[providerId] || (providerId === 'fish' ? settings.fishVoice : '');
-    if (!voice) throw new Error(`No ${p.name} voice selected. Pick one in the panel.`);
-    const tab = await ensureProviderTab(p);
-    return send(tab.id, {
-      type: `${p.msg}:generate`,
-      text: job.text,
-      voice,
-      speed: ps.speed ?? 1,
-      autoTag: !!job.autoTag,
-      // ElevenLabs (web): model + voice_settings, built here so the content
-      // script stays logic-free. fish ignores these.
-      model: ps.model,
-      voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(ps, ps.model) : undefined,
-    });
-  }
-  // apiKey provider — no browser tab needed.
-  const keys = await getApiKeys();
-  return apiGenerate(providerId, { text: job.text, voice: job.voice, keys, settings: ps });
+  const voice = job.voice || settings.voiceByProvider?.[providerId] || (providerId === 'fish' ? settings.fishVoice : '');
+  if (!voice) throw new Error(`No ${p.name} voice selected. Pick one in the panel.`);
+  const tab = await ensureProviderTab(p);
+  return send(tab.id, {
+    type: `${p.msg}:generate`,
+    text: job.text,
+    voice,
+    speed: ps.speed ?? 1,
+    autoTag: !!job.autoTag,
+    // ElevenLabs (web): model + voice_settings, built here so the content
+    // script stays logic-free. fish ignores these.
+    model: ps.model,
+    voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(ps, ps.model) : undefined,
+  });
 }
 
 // Generate one section's audio and save it (project folder or Downloads).
@@ -594,6 +585,7 @@ async function retryFailed(id = null) {
   let retried = 0;
   for (const it of q) {
     if (it.status !== 'failed' || (id && it.id !== id)) continue;
+    if (!PROVIDERS[it.provider]) continue;
     it.status = 'pending';
     it.attempts = 0;
     delete it.error;
@@ -614,15 +606,28 @@ async function retryFailed(id = null) {
 }
 
 // Resume after a worker restart: re-pend any item that was mid-flight when the
-// worker died, then keep going if anything is pending.
+// worker died, migrate legacy ElevenLabs jobs to the web-session provider, and
+// stop legacy OpenAI jobs so they are never sent to a different provider.
 (async () => {
   const q = await getQueue();
   let changed = false;
-  for (const i of q)
+  for (const i of q) {
+    if (i.provider === 'elevenlabs') {
+      i.provider = 'elevenlabs_web';
+      changed = true;
+    }
+    if (i.provider === 'openai' && (i.status === 'pending' || i.status === 'running')) {
+      i.status = 'failed';
+      i.error = 'OpenAI TTS was removed. Re-queue this section with fish.audio or ElevenLabs.';
+      i.finishedAt = Date.now();
+      changed = true;
+      continue;
+    }
     if (i.status === 'running') {
       i.status = 'pending';
       changed = true;
     }
+  }
   if (changed) await setQueue(q);
   if (q.some((i) => i.status === 'pending') && !(await isPaused())) {
     alarmCreate();
@@ -635,16 +640,13 @@ chrome.alarms?.onAlarm?.addListener((a) => {
 });
 
 async function listVoices(providerId) {
-  const p = PROVIDERS[providerId] || PROVIDERS.fish;
-  if (p.type === 'webSession') {
-    // Use an already-open tab; never open one just to read the voice list.
-    const tab = await findProviderTab(p);
-    if (!tab) throw new Error(`Open the ${p.name} page first (↗ Open ${p.name}), then load voices.`);
-    const { voices } = await send(tab.id, { type: `${p.msg}:listVoices` });
-    return { ok: true, voices };
-  }
-  const keys = await getApiKeys();
-  return { ok: true, voices: await listApiVoices(providerId, keys) };
+  const p = PROVIDERS[providerId];
+  if (!p) throw new Error('This provider is no longer supported.');
+  // Use an already-open tab; never open one just to read the voice list.
+  const tab = await findProviderTab(p);
+  if (!tab) throw new Error(`Open the ${p.name} page first (↗ Open ${p.name}), then load voices.`);
+  const { voices } = await send(tab.id, { type: `${p.msg}:listVoices` });
+  return { ok: true, voices };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

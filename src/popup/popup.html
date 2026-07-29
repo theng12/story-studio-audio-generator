@@ -4,20 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="popup.css" />
-    <title>Story Studio TTS</title>
-    <!-- Set an initial theme from the OS to avoid a light flash; the stored
-         preference is applied a moment later once settings load. -->
-    <script>
-      document.documentElement.setAttribute(
-        'data-theme',
-        matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-      );
-    </script>
+    <title>Story Studio Audio Generator</title>
+    <!-- Avoid a light flash before the stored preference loads. -->
+    <script src="../lib/theme-preload.js"></script>
   </head>
   <body>
     <header>
       <div class="header-brand">
-        <h1>Story Studio TTS</h1>
+        <h1>Story Studio Audio Generator</h1>
         <span id="extensionVersion" class="version-badge" title="Installed extension version"></span>
       </div>
       <div class="header-actions">
@@ -26,14 +20,57 @@
       </div>
     </header>
 
-    <label>Provider
-      <select id="provider">
-        <option value="fish">fish.audio</option>
-        <option value="elevenlabs_web">ElevenLabs (web — no key)</option>
-        <option value="elevenlabs">ElevenLabs (API key)</option>
-        <option value="openai">OpenAI TTS (paid 💲)</option>
-      </select>
-    </label>
+    <section id="activityPanel" class="activity-panel" aria-live="polite">
+      <div class="activity-inner">
+        <div class="batch-head">
+          <span>Active batch</span>
+          <span id="activityElapsed" hidden></span>
+        </div>
+        <div id="genStatusBar" class="genstatus idle">
+          <span class="gs-state"><span class="gs-dot"></span><span id="gsStateText">Ready</span></span>
+          <span id="gsCounts" class="gs-counts" hidden>
+            <span class="gs-done" id="gsDone">0 done</span>
+            <span class="gs-failed" id="gsFailed">0 failed</span>
+            <span class="gs-left" id="gsLeft">0 left</span>
+          </span>
+        </div>
+        <div class="activity-copy">
+          <span id="activeJob" class="activity-job">Ready to generate audio</span>
+          <span id="activeJobMeta" class="activity-meta">Choose sections, then queue them.</span>
+        </div>
+        <div class="activity-progress-row">
+          <div class="activity-progress" aria-hidden="true"><span id="activityProgressFill"></span></div>
+          <span id="activityProgressText">0%</span>
+        </div>
+        <div id="queueControls" class="queue-actions" hidden>
+          <button id="pauseQueue" hidden>Pause</button>
+          <button id="retryFailed" hidden>Retry failed</button>
+          <button id="clearQueue">Clear pending</button>
+        </div>
+        <div id="queueDetail" hidden>
+          <div class="queue-table-head"><span id="queueInfo">Queue</span><span>Status</span></div>
+          <ul id="queueList" class="queuelist" hidden></ul>
+          <div class="queue-legend" aria-label="Queue status legend">
+            <span class="pending">◌ Pending</span><span class="running">◌ Running</span><span class="done">✓ Done</span><span class="failed">! Failed</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="form-grid form-grid-two">
+      <label>Provider
+        <select id="provider">
+          <option value="fish">fish.audio</option>
+          <option value="elevenlabs_web">ElevenLabs</option>
+        </select>
+      </label>
+      <label>Voice
+        <div class="voice-control">
+          <select id="voice"></select>
+          <button id="loadVoices" title="Load voices from the provider" aria-label="Load voices">↻</button>
+        </div>
+      </label>
+    </div>
     <p id="providerNote" class="muted"></p>
     <div class="row end open-provider-row">
       <button id="openProviderPage" class="link small" title="Open this provider's page in a tab" hidden>↗ Open provider</button>
@@ -45,12 +82,14 @@
         <button id="testConn" class="link">Test connection</button>
         <span id="connStatus" class="muted"></span>
       </div>
-      <label>Project
-        <select id="project"></select>
-      </label>
-      <label>Episode <span class="muted" id="episodeHint">(script done, audio missing)</span>
-        <select id="episode"></select>
-      </label>
+      <div class="form-grid form-grid-two">
+        <label>Project
+          <select id="project"></select>
+        </label>
+        <label>Episode <span class="muted" id="episodeHint">(audio missing)</span>
+          <select id="episode"></select>
+        </label>
+      </div>
       <label class="check">
         <input type="checkbox" id="showDoneEpisodes" />
         Show episodes that already have all audio
@@ -83,15 +122,10 @@
       </label>
     </section>
 
-    <label>Voice
-      <div class="row">
-        <select id="voice"></select>
-        <button id="loadVoices" title="Load voices from the provider">↻</button>
-      </div>
-    </label>
-
     <!-- Provider / model-specific voice tuning -->
-    <section id="voiceSettings" class="vs-card" hidden>
+    <details id="voiceSettings" class="advanced-panel" hidden>
+      <summary>Voice tuning</summary>
+      <section class="vs-card">
       <div class="row between vs-head">
         <span class="muted small">Voice settings</span>
         <button id="vsReset" class="link small" title="Reset to defaults">Reset</button>
@@ -123,7 +157,8 @@
       </div>
 
       <label class="check" id="vsSpeakerBoostRow"><input type="checkbox" id="vsSpeakerBoost" /> Speaker boost</label>
-    </section>
+      </section>
+    </details>
 
     <label id="saveTargetLabel">Save to
       <select id="saveTarget">
@@ -141,14 +176,18 @@
       <span id="filenamePreview" class="muted"></span>
     </div>
 
-    <button id="generate" class="primary">Generate &amp; save</button>
-    <button id="queueSelected" class="primary" hidden>Queue selected</button>
-    <button id="queueEpisode" hidden>Queue this episode's audio</button>
-    <button id="queueProject" hidden>Queue all pending (whole project)</button>
+    <div class="batch-actions">
+      <button id="generate" class="primary">Generate &amp; save</button>
+      <button id="queueSelected" class="primary" hidden>Queue selected</button>
+      <div class="batch-secondary">
+        <button id="queueEpisode" hidden>Queue this episode</button>
+        <button id="queueProject" hidden>Queue all pending</button>
+      </div>
+    </div>
 
-    <!-- Human pace — a randomised gap between generations so a web session
-         (fish.audio / ElevenLabs) is never flooded -->
-    <section class="pace-card">
+    <details class="advanced-panel">
+      <summary>Human pace</summary>
+      <section class="pace-card">
       <div class="row between">
         <span class="muted small">Human pace <span class="muted">· gap between generations</span></span>
         <span id="humanPaceState" class="pace-state" aria-live="polite"></span>
@@ -166,12 +205,12 @@
         <label class="grow"><span class="mini">Max seconds</span>
           <input id="humanPaceMax" type="number" min="0" max="3600" step="1" /></label>
       </div>
-    </section>
+      </section>
+    </details>
 
-    <!-- Provider cooldown — what happens when a generation comes back with a
-         detected credit/quota/rate-limit error: hard-pause (default) or wait
-         and auto-resume. Scoped to whichever provider is selected above. -->
-    <section class="pace-card">
+    <details class="advanced-panel">
+      <summary>Provider cooldown</summary>
+      <section class="pace-card">
       <div class="row between">
         <span class="muted small">Provider cooldown <span class="muted" id="cooldownProviderName"></span></span>
         <span id="cooldownState" class="pace-state" aria-live="polite"></span>
@@ -197,27 +236,8 @@
           <input id="cooldownMinutes" type="number" min="1" max="1440" step="1" /></label>
       </div>
       <p class="muted" id="cooldownHint">Off (default): a detected limit pauses the whole queue — press Resume yourself once it resets. On: the queue waits the time above and retries on its own (self-correcting — still limited, it waits again). Ordinary failures keep auto-retrying as before either way.</p>
-    </section>
-
-    <!-- Live queue status: Idle / Queued / Generating / Paused / Finished -->
-    <div id="genStatusBar" class="genstatus idle">
-      <span class="gs-state"><span class="gs-dot"></span><span id="gsStateText">Idle</span></span>
-      <span id="gsCounts" class="gs-counts" hidden>
-        <span class="gs-done" id="gsDone">0 done</span>
-        <span class="gs-failed" id="gsFailed">0 failed</span>
-        <span class="gs-left" id="gsLeft">0 left</span>
-      </span>
-    </div>
-
-    <div id="queueControls" class="row between queue-controls" hidden>
-      <span id="queueInfo" class="muted small"></span>
-      <div class="hgroup">
-        <button id="pauseQueue" class="link small" hidden>Pause</button>
-        <button id="retryFailed" class="link small" hidden>Retry failed</button>
-        <button id="clearQueue" class="link small">Clear pending</button>
-      </div>
-    </div>
-    <ul id="queueList" class="queuelist" hidden></ul>
+      </section>
+    </details>
 
     <p id="status" class="muted"></p>
 

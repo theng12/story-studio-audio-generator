@@ -1,16 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Story Studio TTS",
-  "version": "0.7.1",
-  "description": "Generate narration audio (fish.audio, ElevenLabs, OpenAI) from your Story Studio KH scripts and save each file with the correct name.",
+  "name": "Story Studio Audio Generator",
+  "version": "0.7.4",
+  "description": "Generate narration audio through fish.audio or ElevenLabs web sessions from your Story Studio KH scripts and save each file with the correct name.",
   "permissions": ["downloads", "storage", "scripting", "tabs", "sidePanel", "alarms"],
   "host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*",
     "https://fish.audio/*",
     "https://api.fish.audio/*",
-    "https://api.elevenlabs.io/*",
-    "https://api.openai.com/*",
     "https://elevenlabs.io/*",
     "https://api.us.elevenlabs.io/*",
     "https://securetoken.googleapis.com/*"
@@ -21,7 +19,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Story Studio TTS (click to open side panel)",
+    "default_title": "Story Studio Audio Generator (click to open side panel)",
     "default_icon": {
       "16": "src/icons/icon16.png",
       "32": "src/icons/icon32.png",

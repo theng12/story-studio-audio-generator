@@ -1,4 +1,4 @@
-# Story Studio TTS
+# Story Studio Audio Generator
 
 A Chrome (Manifest V3) extension that turns **Story Studio KH** scripts into
 narration audio using a TTS provider you already pay for — and saves each file
@@ -6,7 +6,7 @@ with the correct name, into the right project folder.
 
 ## Providers
 
-Pick the provider in the side panel. Two kinds:
+Pick a web-session provider in the side panel:
 
 - **Web-session — fish.audio, ElevenLabs (web).** Driven through your
   logged-in tab on that site (uses your plan/free quota; **no API key**).
@@ -17,15 +17,6 @@ Pick the provider in the side panel. Two kinds:
     `api.us.elevenlabs.io/v1/text-to-speech/{voice}` — no captcha. Uses the same
     free 10k-chars/month quota as the website. Long text is chunked (per-gen cap
     is 5000 chars) and the MP3s joined. Keep an elevenlabs.io tab open.
-- **API-key — ElevenLabs (API key), OpenAI.** The service worker calls the
-  official API directly with a key you paste in **Settings** (stored locally,
-  never synced). No browser tab needed.
-  - **ElevenLabs (API key)** draws from the same subscription quota; voices come
-    from your account. Use this if you'd rather not keep an elevenlabs.io tab open.
-  - **OpenAI TTS** has fixed voices (alloy, nova, …), is **paid per use**, and a
-    4096-char request cap, so long chapters are split into sentence-boundary
-    chunks and the MP3s joined automatically.
-
 Auto-tag (emotion/pause tags) is a fish.audio-only feature and only shows for
 that provider. Everything else — the queue, save-back, naming — is shared
 across providers.

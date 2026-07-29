@@ -27,10 +27,10 @@ export const DEFAULTS = {
   // Filename template (extension appended automatically).
   // Tokens: {episodeCode} {chapterNum} {chapterLabel} {project}
   filenameTemplate: '{episodeCode} - {chapterNum} {chapterLabel}',
-  // Active TTS provider: 'fish' | 'elevenlabs' | 'openai'.
+  // Active TTS provider: 'fish' | 'elevenlabs_web'.
   provider: 'fish',
   // Remembered voice per provider (so switching providers keeps each choice).
-  voiceByProvider: {}, // { fish: '<id>', elevenlabs: '<id>', openai: 'alloy' }
+  voiceByProvider: {}, // { fish: '<id>', elevenlabs_web: '<id>' }
   // Default fish.audio voice id/name (legacy; mirrored into voiceByProvider).
   fishVoice: '',
   // Where generated audio goes:
@@ -74,18 +74,13 @@ export const DEFAULTS = {
   providerCooldowns: {
     fish: { autoResume: false, minutes: 15 },
     elevenlabs_web: { autoResume: false, minutes: 60 },
-    elevenlabs: { autoResume: false, minutes: 60 },
-    openai: { autoResume: false, minutes: 60 },
   },
 };
 
-// Defaults for the per-provider tuning controls. ElevenLabs (web + API key)
-// share the same shape — a model plus the voice_settings the ElevenLabs API
-// accepts. OpenAI / fish just expose speed.
+// Defaults for the per-provider tuning controls. Both providers use logged-in
+// web sessions; ElevenLabs is model-aware and Fish exposes speed.
 export const PROVIDER_SETTING_DEFAULTS = {
-  elevenlabs: { model: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1, speakerBoost: true },
   elevenlabs_web: { model: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1, speakerBoost: true },
-  openai: { speed: 1 },
   fish: { speed: 1 },
 };
 
@@ -107,9 +102,28 @@ export function providerCooldown(settings, providerId) {
 
 const STORAGE_KEY = 'settings';
 
+// Earlier releases offered direct API providers. Keep saved preferences usable
+// without ever sending them through a different provider unexpectedly.
+function migrateLegacyProviders(settings) {
+  if (!settings) return settings;
+  const next = { ...settings };
+  if (next.provider === 'elevenlabs') next.provider = 'elevenlabs_web';
+  if (next.provider === 'openai') next.provider = 'fish';
+  if (next.voiceByProvider?.elevenlabs && !next.voiceByProvider.elevenlabs_web) {
+    next.voiceByProvider = { ...next.voiceByProvider, elevenlabs_web: next.voiceByProvider.elevenlabs };
+  }
+  if (next.providerSettings?.elevenlabs && !next.providerSettings.elevenlabs_web) {
+    next.providerSettings = { ...next.providerSettings, elevenlabs_web: next.providerSettings.elevenlabs };
+  }
+  if (next.providerCooldowns?.elevenlabs && !next.providerCooldowns.elevenlabs_web) {
+    next.providerCooldowns = { ...next.providerCooldowns, elevenlabs_web: next.providerCooldowns.elevenlabs };
+  }
+  return next;
+}
+
 export async function getSettings() {
   const stored = await chrome.storage.sync.get(STORAGE_KEY);
-  return { ...DEFAULTS, ...(stored[STORAGE_KEY] || {}) };
+  return { ...DEFAULTS, ...migrateLegacyProviders(stored[STORAGE_KEY] || {}) };
 }
 
 export async function saveSettings(patch) {
@@ -130,18 +144,4 @@ export async function getCredentials() {
 
 export async function saveCredentials({ username, password }) {
   await chrome.storage.local.set({ [CRED_KEY]: { username, password } });
-}
-
-// Provider API keys (ElevenLabs, OpenAI). LOCAL storage only — these are
-// secrets and must never sync to the Google account.
-const KEYS_KEY = 'providerKeys';
-
-export async function getApiKeys() {
-  const stored = await chrome.storage.local.get(KEYS_KEY);
-  return stored[KEYS_KEY] || { elevenLabsKey: '', openaiKey: '' };
-}
-
-export async function saveApiKeys(patch) {
-  const current = await getApiKeys();
-  await chrome.storage.local.set({ [KEYS_KEY]: { ...current, ...patch } });
 }

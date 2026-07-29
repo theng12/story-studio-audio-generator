@@ -116,13 +116,18 @@ async function init() {
   if (lastStatus && (Date.now() - lastStatus.ts < 30 * 60 * 1000 || stillCooling)) {
     liveStatus = lastStatus;
     applyLiveStatus();
+    renderQueueUI();
   }
-  setInterval(tickCountdown, 1000); // ticks the "Waiting Ns…" countdown
+  setInterval(() => {
+    tickCountdown();
+    renderActivityElapsed();
+  }, 1000);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.lastStatus) {
       liveStatus = changes.lastStatus.newValue || null;
       applyLiveStatus();
+      renderQueueUI();
     }
     if (changes.queuePaused) {
       queueState.paused = !!changes.queuePaused.newValue;
@@ -191,22 +196,17 @@ function updateCompanionHints() {
   if (eh) eh.textContent = settings.showDoneEpisodes ? '(all episodes with a script)' : '(script done, audio missing)';
 }
 
-// Show provider-specific UI bits (auto-tag is a fish.audio-only feature) and a
-// cost note so the paid provider can't be confused for a free one.
+// Show provider-specific UI bits (auto-tag is a fish.audio-only feature).
 const PROVIDER_NOTE = {
   fish: 'Uses your fish.audio web plan (free). Keep a logged-in fish.audio tab.',
-  elevenlabs_web: 'Drives your logged-in elevenlabs.io session — no key. Free tier = 10k chars/month. Keep an elevenlabs.io tab open.',
-  elevenlabs: 'Uses your ElevenLabs quota — free tier gives 10k chars/month. Needs your API key in Settings.',
-  openai: '💲 Paid — OpenAI TTS bills your OpenAI account per use (no free tier).',
+  elevenlabs_web: 'Uses your logged-in elevenlabs.io session. Keep an elevenlabs.io tab open.',
 };
-// Which providers drive a logged-in web tab (vs. calling an API with a key).
+// Both supported providers drive a logged-in web tab.
 const WEB_PROVIDER = { fish: 'fish.audio', elevenlabs_web: 'elevenlabs.io' };
 // Display names for provider ids — used in cooldown/limit messaging.
 const PROVIDER_LABEL = {
   fish: 'fish.audio',
-  elevenlabs_web: 'ElevenLabs (web)',
-  elevenlabs: 'ElevenLabs',
-  openai: 'OpenAI TTS',
+  elevenlabs_web: 'ElevenLabs',
 };
 // ms -> "2h 15m" / "15m 32s" / "32s" — cooldowns run minutes-to-hours, unlike
 // the seconds-scale human-pace gap, so this needs the larger units too.
@@ -241,14 +241,13 @@ async function onOpenProviderPage() {
 
 // ── Voice settings (per provider, model-aware for ElevenLabs) ────────────────
 const currentProviderSettings = () => getProviderSettings(settings, currentProvider());
-const isElevenProvider = (p) => p === 'elevenlabs' || p === 'elevenlabs_web';
+const isElevenProvider = (p) => p === 'elevenlabs_web';
 const fmt2 = (v) => Number(v).toFixed(2);
 // Snap a continuous stability to v3's nearest discrete preset (0 / 0.5 / 1).
 const nearestStabilityMode = (v) =>
   [0, 0.5, 1].reduce((a, b) => (Math.abs(b - Number(v)) < Math.abs(a - Number(v)) ? b : a), 0.5);
-// Speed slider range differs per provider (ElevenLabs 0.7–1.2, OpenAI 0.25–4, fish 0.5–2).
-const speedRange = (p) =>
-  p === 'openai' ? { min: 0.25, max: 4 } : p === 'fish' ? { min: 0.5, max: 2 } : { min: 0.7, max: 1.2 };
+// Speed slider range differs between Fish and ElevenLabs.
+const speedRange = (p) => (p === 'fish' ? { min: 0.5, max: 2 } : { min: 0.7, max: 1.2 });
 
 // Persist a change to the current provider's settings.
 async function saveProviderSetting(patch) {
@@ -318,8 +317,8 @@ function renderVoiceSettings() {
     $('vsStyleVal').textContent = fmt2(ps.style);
   }
 
-  // Speed (ElevenLabs v2/flash, OpenAI, fish — not ElevenLabs v3).
-  const showSpeed = p === 'openai' || p === 'fish' || (eleven && meta.speed);
+  // Speed (ElevenLabs v2/flash and Fish — not ElevenLabs v3).
+  const showSpeed = p === 'fish' || (eleven && meta.speed);
   $('vsSpeedRow').hidden = !showSpeed;
   if (showSpeed) {
     const el = $('vsSpeed');
@@ -495,12 +494,9 @@ async function initWhatsNew(version) {
   };
 }
 
-// How this provider charges — used in the queue confirmation dialogs.
+// How this provider uses its web-session quota — shown before a batch starts.
 function costPhrase() {
-  const p = currentProvider();
-  if (p === 'openai') return '💲 bills your paid OpenAI account (per use)';
-  if (p === 'elevenlabs' || p === 'elevenlabs_web') return 'uses your ElevenLabs quota';
-  return 'uses your fish.audio web plan';
+  return currentProvider() === 'elevenlabs_web' ? 'uses your ElevenLabs quota' : 'uses your fish.audio web plan';
 }
 
 // ── Companion mode ─────────────────────────────────────────────────────────
@@ -929,7 +925,7 @@ async function onPaceCustom() {
 }
 
 // ── Queue view (status bar + controls + list) ────────────────────────────────
-const Q_GLYPH = { pending: '•', running: '⟳', done: '✓', failed: '✗' };
+const Q_STATUS = { pending: 'Pending', running: 'Running', done: 'Done', failed: 'Failed' };
 
 // A cooldown is "active" when the live status is currently carrying one for
 // the provider it named — derived from liveStatus (pushed live via storage),
@@ -963,12 +959,15 @@ function updateGenStatus(queue, paused, coolingDown = false) {
     const name = PROVIDER_LABEL[liveStatus?.countdownProvider] || liveStatus?.countdownProvider || 'Provider';
     state = `Cooldown · ${name}`;
     cls = 'cooldown';
+  } else if (left > 0 && Number(liveStatus?.countdownUntil) > Date.now()) {
+    state = 'Waiting';
+    cls = 'waiting';
   } else if (paused && left > 0) {
     state = 'Paused';
     cls = 'paused';
   } else if (left > 0) {
-    state = running ? 'Generating' : 'Queued';
-    cls = 'running';
+    state = running ? 'Generating narration' : 'Queued';
+    cls = running ? 'running' : 'queued';
   } else if (queue.length) {
     state = 'Finished';
     cls = 'done';
@@ -979,6 +978,52 @@ function updateGenStatus(queue, paused, coolingDown = false) {
   $('gsFailed').textContent = `${failed} failed`;
   $('gsLeft').textContent = `${left} left`;
   $('gsCounts').hidden = queue.length === 0;
+  updateActivityPanel(queue, { done, failed, left, running, state, cls });
+}
+
+// The compact activity panel remains useful even when the queue list is long:
+// it tells the user exactly what is happening and how far the batch has moved.
+function updateActivityPanel(queue, { done, failed, left, running, state, cls }) {
+  const active = queue.find((i) => i.status === 'running');
+  const next = queue.find((i) => i.status === 'pending');
+  const current = active || next;
+  const panel = $('activityPanel');
+  panel.classList.toggle('is-running', running);
+  panel.classList.toggle('is-waiting', cls === 'waiting' || cls === 'cooldown');
+  panel.classList.toggle('is-complete', cls === 'done' && failed === 0);
+  panel.classList.toggle('has-failure', cls === 'done' && failed > 0);
+
+  $('activeJob').textContent = current
+    ? active ? `Generating ${current.label}` : `Up next: ${current.label}`
+    : queue.length ? (failed ? 'Queue finished with issues' : 'All audio saved') : 'Ready to generate audio';
+  const speed = Number(current?.providerSettings?.speed);
+  const context = [
+    PROVIDER_LABEL[current?.provider] || current?.provider || 'TTS',
+    current?.voice ? `Voice ${current.voice}` : '',
+    Number.isFinite(speed) && speed !== 1 ? `${speed.toFixed(2)}x` : '',
+  ].filter(Boolean);
+  $('activeJobMeta').textContent = current
+    ? `${context.join(' · ')}${active ? ' · saving when complete' : ''}`
+    : queue.length ? `${done} saved${failed ? ` · ${failed} failed` : ''}` : 'Choose sections, then queue them.';
+
+  const total = queue.length;
+  const completed = done + failed + (running ? 0.45 : 0);
+  const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  $('activityProgressFill').style.width = `${percent}%`;
+  $('activityProgressText').textContent = `${percent}%`;
+  renderActivityElapsed();
+}
+
+function renderActivityElapsed() {
+  const active = queueState.queue.find((i) => i.status === 'running' && Number(i.startedAt));
+  const el = $('activityElapsed');
+  el.hidden = !active;
+  if (!active) return;
+  const seconds = Math.max(0, Math.floor((Date.now() - Number(active.startedAt)) / 1000));
+  const h = String(Math.floor(seconds / 3600)).padStart(2, '0');
+  const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
+  el.textContent = `Elapsed ${h}:${m}:${s}`;
 }
 
 function renderQueueControls(queue, paused, coolingDown = false) {
@@ -986,11 +1031,8 @@ function renderQueueControls(queue, paused, coolingDown = false) {
   const done = queue.filter((i) => i.status === 'done').length;
   const failed = queue.filter((i) => i.status === 'failed').length;
   $('queueControls').hidden = queue.length === 0;
-  const parts = [];
-  if (active) parts.push(`${active} queued`);
-  if (done) parts.push(`${done} done`);
-  if (failed) parts.push(`${failed} failed`);
-  $('queueInfo').textContent = parts.length ? `Queue: ${parts.join(' · ')}` : '';
+  $('queueDetail').hidden = queue.length === 0;
+  $('queueInfo').textContent = `Queue (${queue.length})`;
   const pause = $('pauseQueue');
   pause.hidden = active === 0; // pause/resume only matters while there's work
   pause.textContent = paused || coolingDown ? 'Resume' : 'Pause';
@@ -1001,14 +1043,20 @@ function renderQueueList(queue) {
   const ul = $('queueList');
   ul.innerHTML = '';
   ul.hidden = queue.length === 0;
-  for (const it of queue) {
+  for (const [index, it] of queue.entries()) {
     const li = document.createElement('li');
     li.className = `qrow q-${it.status}`;
+    const number = document.createElement('span');
+    number.className = 'qindex';
+    number.textContent = String(index + 1);
     const label = document.createElement('span');
     label.className = 'qlabel';
-    label.textContent = `${Q_GLYPH[it.status] || '•'} ${it.label}${it.savedAs ? ` → ${it.savedAs}` : ''}`;
+    label.textContent = it.label;
     if (it.status === 'failed' && it.error) label.title = it.error;
-    li.appendChild(label);
+    const state = document.createElement('span');
+    state.className = `qstate ${it.status}`;
+    state.textContent = Q_STATUS[it.status] || 'Pending';
+    li.append(number, label, state);
     const actions = document.createElement('div');
     actions.className = 'qactions';
     if (it.status === 'pending') {
@@ -1018,7 +1066,7 @@ function renderQueueList(queue) {
       x.title = 'Remove from queue';
       x.dataset.id = it.id;
       actions.appendChild(x);
-    } else if (it.status === 'failed') {
+    } else if (it.status === 'failed' && WEB_PROVIDER[it.provider]) {
       const r = document.createElement('button');
       r.className = 'qretry';
       r.textContent = '↻';

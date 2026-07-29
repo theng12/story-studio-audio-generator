@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.4 — Story Studio Audio Generator
+
+- **Renamed extension.** Chrome, the side panel, and Settings now use the
+  Story Studio Audio Generator name.
+
+## 0.7.3 — Web-session only
+
+- **Removed OpenAI TTS.** Story Studio Audio Generator now supports only the logged-in
+  fish.audio and ElevenLabs web sessions. The OpenAI provider, API-key setting,
+  direct API code, and host permission have been removed. Existing OpenAI queue
+  items are marked failed with a re-queue message rather than being rerouted.
+
+## 0.7.2 — Queue workspace and web-session ElevenLabs
+
+- **ElevenLabs is web-session only.** Removed the direct API-key provider and
+  its Settings field. Existing ElevenLabs selections, voice settings, cooldowns,
+  and queued jobs migrate to the logged-in `elevenlabs.io` session automatically.
+- **Queue workspace refresh.** The side panel now leads with a structured Active
+  Batch view: state border, elapsed time, real batch progress, queue actions,
+  and numbered status rows. Provider/voice and project/episode fields pair for
+  faster scanning, while Human pace and Provider cooldown are separate sections.
+- **Extension-page CSP fix.** Theme bootstrapping now uses an external script,
+  so Chrome no longer blocks the popup or Settings page for an inline script.
+
 ## 0.7.1 — Fix chunked chapters showing as missing but un-generatable
 
 A chapter whose script is long enough that Story Studio splits it for TTS lands

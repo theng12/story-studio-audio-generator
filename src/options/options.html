@@ -2,23 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Story Studio TTS — Settings</title>
+    <title>Story Studio Audio Generator — Settings</title>
     <link rel="stylesheet" href="../popup/popup.css" />
     <style>
       /* Center the settings column on the full-width options page. */
       body { width: 100%; max-width: none; padding: 24px 16px; }
       .settings-wrap { width: 100%; max-width: 480px; margin: 0 auto; }
     </style>
-    <script>
-      document.documentElement.setAttribute(
-        'data-theme',
-        matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-      );
-    </script>
+    <script src="../lib/theme-preload.js"></script>
   </head>
   <body>
     <div class="settings-wrap">
-    <header><h1>Story Studio TTS — Settings</h1></header>
+    <header><h1>Story Studio Audio Generator — Settings</h1></header>
 
     <label>Theme
       <select id="theme">
@@ -74,21 +69,6 @@
       <input id="filenameTemplate" />
     </label>
     <p class="muted">Tokens: <code>{project} {episodeCode} {chapterNum} {chapterLabel} {episodeTitle}</code></p>
-
-    <h3 style="margin:14px 0 0;font-size:13px;">Provider API keys</h3>
-    <p class="muted">Stored locally on this device (never synced). fish.audio
-      needs no key — it uses your logged-in fish.audio tab.</p>
-    <label>ElevenLabs API key
-      <input id="elevenLabsKey" type="password" autocomplete="off" placeholder="paste your ElevenLabs API key" />
-    </label>
-    <p class="muted">How to get it: open
-      <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → Settings → API Keys</a>,
-      click <strong>Create API Key</strong>, copy it, and paste it here. The free
-      plan (10k characters/month) includes API access — it draws from the same
-      quota as the website, so this stays free.</p>
-    <label>OpenAI API key
-      <input id="openaiKey" type="password" autocomplete="off" placeholder="sk-… (platform.openai.com)" />
-    </label>
 
     <div class="row end">
       <span id="status" class="muted small"></span>

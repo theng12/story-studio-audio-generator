@@ -3,8 +3,6 @@ import {
   saveSettings,
   getCredentials,
   saveCredentials,
-  getApiKeys,
-  saveApiKeys,
   DEFAULTS,
 } from '../lib/config.js';
 import { StudioClient } from '../lib/story-studio.js';
@@ -31,9 +29,6 @@ async function load() {
   const cred = await getCredentials();
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
-  const keys = await getApiKeys();
-  $('elevenLabsKey').value = keys.elevenLabsKey || '';
-  $('openaiKey').value = keys.openaiKey || '';
   toggleCompanion();
   $('mode').addEventListener('change', toggleCompanion);
   $('save').addEventListener('click', save);
@@ -44,7 +39,7 @@ async function load() {
 
   // Auto-save every field as you edit — no "did it save?" doubt. The explicit
   // Save button stays as a belt-and-suspenders.
-  const allFields = [...FIELDS, 'studioUsername', 'studioPassword', 'elevenLabsKey', 'openaiKey'];
+  const allFields = [...FIELDS, 'studioUsername', 'studioPassword'];
   for (const id of allFields) {
     const el = $(id);
     if (!el) continue;
@@ -76,10 +71,6 @@ async function save() {
     await saveCredentials({
       username: $('studioUsername').value.trim(),
       password: $('studioPassword').value, // not trimmed — passwords may have spaces
-    });
-    await saveApiKeys({
-      elevenLabsKey: $('elevenLabsKey').value.trim(),
-      openaiKey: $('openaiKey').value.trim(),
     });
     showSaved();
   } catch (e) {
