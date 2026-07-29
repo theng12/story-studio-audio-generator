@@ -254,7 +254,7 @@ function applyProviderUI() {
   const site = WEB_PROVIDER[p];
   const openBtn = $('openProviderPage');
   openBtn.hidden = !site;
-  if (site) openBtn.textContent = `↗ Open ${site}`;
+  if (site) openBtn.textContent = '↗ Open workspace';
 }
 
 // Open (or focus) the current provider's page — the only place the extension

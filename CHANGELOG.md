@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.13 - Provider action
+
+- Standardized the provider open action as a compact button.
+
 ## 0.7.12 - Working modes
 
 - Made Story Studio and Standalone workflows explicit in the side panel.
