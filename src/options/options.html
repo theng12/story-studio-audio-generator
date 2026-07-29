@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <title>Story Studio Audio Generator — Settings</title>
     <link rel="stylesheet" href="../popup/popup.css" />
+    <link rel="stylesheet" href="options.css" />
     <style>
       /* Center the settings column on the full-width options page. */
       body { width: 100%; max-width: none; padding: 24px 16px; }
@@ -11,42 +12,46 @@
     </style>
     <script src="../lib/theme-preload.js"></script>
   </head>
-  <body>
+  <body class="settings-page">
     <div class="settings-wrap">
-    <header><h1>Story Studio Audio Generator — Settings</h1></header>
+    <header class="settings-header"><h1>Story Studio Audio Generator — Settings</h1></header>
 
-    <label>Theme
-      <select id="theme">
-        <option value="system">System (match OS)</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
+    <section class="settings-section">
+      <span class="settings-section-title">Appearance</span>
+      <label>Theme
+        <select id="theme">
+          <option value="system">System (match OS)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+    </section>
 
-    <label>Story Studio server URL
-      <input id="studioBaseUrl" placeholder="http://localhost:8677" />
-    </label>
-    <p class="muted">Local studio (<code>localhost</code>) needs no login or
-      access grant. A remote / Tailscale server (e.g.
-      <code>http://mac-mini.tailXXXX.ts.net:8677</code>) needs both.</p>
-    <div class="row">
-      <button id="grantAccess">Grant access to this server</button>
-      <button id="testConnection">Test connection</button>
-    </div>
-    <p id="grantStatus" class="muted"></p>
-    <p id="testStatus" class="muted"></p>
+    <section class="settings-section">
+      <span class="settings-section-title">Story Studio connection</span>
+      <label>Server URL
+        <input id="studioBaseUrl" placeholder="http://localhost:8677" />
+      </label>
+      <p class="hint">Local Studio needs no login or access grant. A remote or Tailscale server needs both.</p>
+      <div class="row settings-actions">
+        <button id="grantAccess" class="btn">Grant site access</button>
+        <button id="testConnection" class="btn">Test connection</button>
+      </div>
+      <p id="grantStatus" class="connection-note" aria-live="polite"></p>
+      <p id="testStatus" class="connection-note" aria-live="polite"></p>
 
-    <label>Username <span class="muted">(only for remote servers)</span>
-      <input id="studioUsername" autocomplete="off" placeholder="leave blank for localhost" />
-    </label>
-    <label>Password
-      <input id="studioPassword" type="password" autocomplete="off" placeholder="stored locally on this device" />
-    </label>
+      <div class="form-grid form-grid-two">
+        <label>Username <span class="muted">(remote only)</span>
+          <input id="studioUsername" autocomplete="off" placeholder="Leave blank for localhost" />
+        </label>
+        <label>Password
+          <input id="studioPassword" type="password" autocomplete="off" placeholder="Stored locally" />
+        </label>
+      </div>
+      <p class="hint">Finished audio is saved back to the connected Story Studio project.</p>
+    </section>
 
-    <p class="muted">Finished audio is posted back to the connected Story Studio
-      project, where the workspace stores it with its normal episode naming.</p>
-
-    <div class="row end">
+    <div class="row end settings-footer">
       <span id="status" class="muted small"></span>
       <button id="save" class="primary">Save</button>
     </div>

@@ -117,7 +117,10 @@
     <section id="studioPane">
       <div class="studio-connection">
         <span id="connStatus" class="connection-status" role="status" aria-live="polite"></span>
-        <button id="testConn" class="workspace-action" type="button">Test Studio connection</button>
+        <div class="studio-connection-actions">
+          <button id="openStudioSettings" class="workspace-action" type="button" hidden>Update Studio URL</button>
+          <button id="testConn" class="workspace-action" type="button">Test Studio connection</button>
+        </div>
       </div>
       <div class="form-grid form-grid-two">
         <label>Project

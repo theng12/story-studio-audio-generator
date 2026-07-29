@@ -42,6 +42,7 @@ async function init() {
   initWhatsNew(manifest.version);
   settings = await getSettings();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('openStudioSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openProviderPage').addEventListener('click', onOpenProviderPage);
   $('loadVoices').addEventListener('click', loadVoices);
   await initVoices();
@@ -1188,6 +1189,7 @@ function renderConnectionStatus() {
   const out = $('connStatus');
   if (!out || !studioConnectionTest || studioConnectionTest.url !== settings?.studioBaseUrl) return;
   const connected = studioConnectionTest.state === 'connected';
+  $('openStudioSettings').hidden = connected;
   const text = `${connected ? 'Connected' : 'Failed'} · ${testedAtLabel(studioConnectionTest.at)}`;
   out.textContent = text;
   out.title = studioConnectionTest.detail || '';

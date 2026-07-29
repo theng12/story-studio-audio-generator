@@ -206,6 +206,8 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding
 #queueEpisode, #queueProject { width: 100%; }
 .hgroup { display: flex; align-items: center; gap: 8px; }
 .studio-connection { display: flex; align-items: center; justify-content: flex-end; gap: var(--space); margin-top: var(--space); }
+.studio-connection-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.studio-connection-actions #openStudioSettings { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); color: var(--danger); }
 .connection-status { min-width: 0; margin-right: auto; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-status.connected { color: var(--ok); }
 .connection-status.failed { color: var(--danger); }

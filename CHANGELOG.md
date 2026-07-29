@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.16 - Connection recovery and settings
+
+- A failed panel connection test now links directly to the Studio URL setting.
+- Reorganized Settings into consistent Appearance and Story Studio connection sections.
+
 ## 0.7.15 - Panel consistency
 
 - Standardized the side-panel toolbar, disclosures, control sizing, action hierarchy, and queue activity treatment.
