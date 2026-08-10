@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.25 - Dynamic web providers and safe recovery
+
+- Discover Fish Audio and ElevenLabs models from the active signed-in web
+  sessions, with conservative fallbacks when live discovery is unavailable.
+- Preserve generated audio across Story Studio, download, retry, and browser
+  restart failures without repeating uncertain paid provider requests.
+- Classify uncertain generation outcomes as Review required instead of
+  retrying them automatically.
+
 ## 0.7.24 - Standalone batch review
 
 - Added a paste, review, and approval flow for standalone audio scripts.

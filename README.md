@@ -18,7 +18,10 @@ A Chrome extension for turning Story Studio scripts into organized audio files.
 
 ## Availability
 
-Audio generation uses a compatible signed-in browser session. Available voices and limits depend on the session you are using.
+Audio generation uses signed-in Fish Audio or ElevenLabs browser sessions; no
+provider API key is required. The extension discovers the available voices,
+models, capabilities, and limits from the active account when the provider
+exposes them, with conservative fallbacks when live discovery is unavailable.
 
 ## Install
 
