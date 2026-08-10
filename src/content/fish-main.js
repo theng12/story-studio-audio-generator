@@ -46,28 +46,63 @@
     const j = await r.json();
     const arr = Array.isArray(j) ? j : j.items || [];
     const voices = arr.map((v) => ({ id: v._id, title: v.title }));
-    return { voices, visibleModels: visibleModelLabels() };
+    return { voices, fishModelOptions: await collectFishModelOptions() };
   }
 
-  // Read only the visible Model control and any currently rendered visible
-  // options; never inspect Fish's private application state.
-  function visibleModelLabels() {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function fishModelControl() {
     const visible = (element) => !!element?.getClientRects?.().length;
-    const labels = [];
     for (const control of document.querySelectorAll('select, [role="combobox"]')) {
       if (!visible(control)) continue;
       const context = `${control.getAttribute('aria-label') || ''} ${control.labels?.[0]?.textContent || ''} ${control.parentElement?.textContent || ''}`;
-      if (!/model/i.test(context)) continue;
-      if (control.tagName === 'SELECT') {
-        for (const option of control.options) labels.push(option.textContent || '');
-      } else {
-        labels.push(control.textContent || control.getAttribute('aria-label') || '');
-      }
+      if (/model/i.test(context)) return control;
     }
-    for (const option of document.querySelectorAll('[role="option"]')) {
-      if (visible(option)) labels.push(option.textContent || '');
+    return null;
+  }
+
+  function renderedFishModelLabels(control) {
+    if (control.tagName === 'SELECT') return [...control.options].map((option) => option.textContent || '');
+    const visible = (element) => !!element?.getClientRects?.().length;
+    return [...document.querySelectorAll('[role="option"]')]
+      .filter(visible)
+      .map((option) => option.textContent || '');
+  }
+
+  async function openFishModelCombobox(control) {
+    const wasExpanded = control.getAttribute('aria-expanded') === 'true';
+    if (!wasExpanded) {
+      control.focus();
+      control.click();
     }
-    return labels.filter((label) => /Fish Audio S(?:2\.1 Pro|2 Pro|1)\b/i.test(label));
+    let previous = '';
+    let stableRounds = 0;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const labels = renderedFishModelLabels(control).filter((label) => /Fish Audio S\d/i.test(label));
+      const signature = labels.join('\n');
+      stableRounds = labels.length && signature === previous ? stableRounds + 1 : 0;
+      if (stableRounds >= 2) return { labels, opened: !wasExpanded };
+      previous = signature;
+      await sleep(50);
+    }
+    return { labels: [], opened: !wasExpanded };
+  }
+
+  async function closeFishModelCombobox(control, opened) {
+    if (!opened) return;
+    if (control.tagName === 'SELECT') control.blur();
+    else if (control.getAttribute('aria-expanded') === 'true') control.click();
+    await sleep(50);
+  }
+
+  // Opening only exposes options; it never selects one. A current combobox
+  // label alone is intentionally not accepted as a complete model inventory.
+  async function collectFishModelOptions() {
+    const control = fishModelControl();
+    if (!control) return { labels: [], complete: false };
+    const { labels, opened } = await openFishModelCombobox(control);
+    await closeFishModelCombobox(control, opened);
+    return labels.length ? { labels, complete: true } : { labels: [], complete: false };
   }
 
   // Returns { base64, mime } for the generated audio.

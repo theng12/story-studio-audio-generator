@@ -106,7 +106,7 @@
     if (!text || !text.trim()) throw new Error('No text to speak.');
     if (!voice) throw new Error('Pick an ElevenLabs voice.');
     const buffers = [];
-    const limit = Math.max(1, Math.min(MAX_CHARS, Number(maxChars) || MAX_CHARS));
+    const limit = Math.max(1, Number(maxChars) || MAX_CHARS);
     for (const chunk of splitText(text, limit)) {
       const body = { text: chunk, model_id: model || MODEL };
       if (voiceSettings) body.voice_settings = voiceSettings;

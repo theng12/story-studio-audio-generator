@@ -1025,7 +1025,7 @@ async function providerInventory(providerId) {
   const response = await send(tab.id, { type: `${p.messageNamespace}:inventory` });
   const inventory = providerId === 'elevenlabs_web'
     ? createElevenInventory(response.raw?.modelsPayload, response.raw?.voices)
-    : createFishInventory(response.raw?.visibleModels, response.raw?.voices);
+    : createFishInventory(response.raw?.fishModelOptions, response.raw?.voices);
   return { ok: true, inventory: { ...inventory, fetchedAt: Date.now() } };
 }
 

@@ -9,9 +9,9 @@ export const FISH_FALLBACK_MODELS = [
 ];
 
 export const ELEVEN_FALLBACK_MODELS = [
-  { id: 'eleven_multilingual_v2', label: 'Multilingual v2 - lifelike quality', maxChars: ELEVEN_DEFAULT_MAX_CHARS, style: true, speed: true, stability: 'slider' },
-  { id: 'eleven_flash_v2_5', label: 'Flash v2.5 - fast and affordable', maxChars: ELEVEN_DEFAULT_MAX_CHARS, style: true, speed: true, stability: 'slider' },
-  { id: 'eleven_v3', label: 'v3 - expressive', maxChars: ELEVEN_DEFAULT_MAX_CHARS, style: false, speed: false, stability: 'discrete' },
+  { id: 'eleven_multilingual_v2', label: 'Multilingual v2 - lifelike quality', maxChars: ELEVEN_DEFAULT_MAX_CHARS, style: true, speakerBoost: true, speed: true, stability: 'slider' },
+  { id: 'eleven_flash_v2_5', label: 'Flash v2.5 - fast and affordable', maxChars: ELEVEN_DEFAULT_MAX_CHARS, style: true, speakerBoost: true, speed: true, stability: 'slider' },
+  { id: 'eleven_v3', label: 'v3 - expressive', maxChars: ELEVEN_DEFAULT_MAX_CHARS, style: false, speakerBoost: true, speed: false, stability: 'discrete' },
 ];
 
 export const PROVIDERS = {
@@ -46,10 +46,8 @@ export const PROVIDER_SETTING_DEFAULTS = Object.fromEntries(
 const knownElevenControls = Object.fromEntries(ELEVEN_FALLBACK_MODELS.map((model) => [model.id, model]));
 
 const fishBackendId = (label) => {
-  if (/\bS2\.1\s*Pro\b/i.test(label)) return 's2.1-pro';
-  if (/\bS2\s*Pro\b/i.test(label)) return 's2-pro';
-  if (/\bS1\b/i.test(label)) return 's1';
-  return '';
+  const match = String(label).match(/\bS(\d+(?:\.\d+)?)(?:\s+(Pro))?\b/i);
+  return match ? `s${match[1]}${match[2] ? '-pro' : ''}` : '';
 };
 
 // Fish's visible Model control names the backend but does not expose a stable
@@ -62,8 +60,11 @@ export function normalizeFishTtsModels(labels) {
     .filter((model) => model.id && !seen.has(model.id) && seen.add(model.id));
 }
 
-export function createFishInventory(labels, voices = []) {
-  const models = normalizeFishTtsModels(labels);
+export function createFishInventory(modelOptions, voices = []) {
+  const { labels, complete } = Array.isArray(modelOptions)
+    ? { labels: modelOptions, complete: true }
+    : modelOptions || {};
+  const models = complete ? normalizeFishTtsModels(labels) : [];
   return {
     voices: Array.isArray(voices) ? voices : [],
     models: models.length ? models : FISH_FALLBACK_MODELS,
@@ -92,14 +93,15 @@ export function normalizeElevenTtsModels(payload) {
     .map((model) => {
       const id = String(model.model_id || model.id || '');
       if (!id) return null;
-      const controls = knownElevenControls[id] || { style: true, speed: true, stability: 'slider' };
+      const known = knownElevenControls[id];
       return {
         id,
         label: String(model.name || model.display_name || id),
         maxChars: advertisedMaxChars(model),
-        style: controls.style,
-        speed: controls.speed,
-        stability: controls.stability,
+        style: typeof model.can_use_style === 'boolean' ? model.can_use_style : known?.style || false,
+        speakerBoost: typeof model.can_use_speaker_boost === 'boolean' ? model.can_use_speaker_boost : known?.speakerBoost || false,
+        speed: known?.speed || false,
+        stability: known?.stability || 'slider',
       };
     })
     .filter(Boolean);
@@ -123,6 +125,11 @@ export function resolveElevenModel(id, models = ELEVEN_FALLBACK_MODELS) {
 export function resolveFishModel(id, models = FISH_FALLBACK_MODELS) {
   const model = models.find((candidate) => candidate.id === id) || models[0] || FISH_FALLBACK_MODELS[0];
   return { model, repaired: model.id !== id };
+}
+
+export function modelMetaNeedsSync(saved, live) {
+  if (!live || saved?.id !== live.id) return true;
+  return ['label', 'maxChars', 'style', 'speakerBoost', 'speed', 'stability'].some((key) => saved[key] !== live[key]);
 }
 
 export const ELEVEN_STABILITY_MODES = [
@@ -151,9 +158,9 @@ export function buildElevenVoiceSettings(settings = {}, model) {
   const voiceSettings = {
     stability,
     similarity_boost: clamp(settings.similarity, 0, 1, 0.75),
-    use_speaker_boost: settings.speakerBoost !== false,
   };
   if (meta.style) voiceSettings.style = clamp(settings.style, 0, 1, 0);
+  if (meta.speakerBoost) voiceSettings.use_speaker_boost = settings.speakerBoost !== false;
   if (meta.speed) voiceSettings.speed = clamp(settings.speed, 0.7, 1.2, 1);
   return voiceSettings;
 }

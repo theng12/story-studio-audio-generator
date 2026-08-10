@@ -2,7 +2,7 @@ import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDE
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { sectionSlugFromFile } from '../lib/naming.js';
-import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, resolveElevenModel, resolveFishModel } from '../lib/providers.js';
+import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, resolveElevenModel, resolveFishModel } from '../lib/providers.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
@@ -28,7 +28,7 @@ let studioConnectionTest = null;
 const STUDIO_CONNECTION_TEST_KEY = 'studioConnectionTest';
 let standaloneScripts = [];
 let providerInventories = {};
-let repairingModel = '';
+let syncingElevenModel = '';
 
 // An episode is worth showing when its script is done and (audio is missing, or
 // the user asked to also see already-done episodes for re-voicing).
@@ -293,7 +293,9 @@ function renderVoiceSettings() {
     const resolved = eleven ? resolveElevenModel(ps.model, models) : resolveFishModel(ps.model, models);
     sel.value = resolved.model.id;
     meta = resolved.model;
-    if (resolved.repaired && providerInventories[p]?.authoritative) repairElevenModel(resolved.model);
+    if (eleven && providerInventories[p]?.authoritative && (resolved.repaired || modelMetaNeedsSync(ps.modelMeta, resolved.model))) {
+      syncLiveElevenModel(resolved.model);
+    }
   }
 
   // Stability (ElevenLabs): slider for v2/flash, discrete Creative/Natural/Robust for v3.
@@ -347,9 +349,10 @@ function renderVoiceSettings() {
     $('vsSpeedVal').textContent = `${Number(ps.speed ?? 1).toFixed(2)}×`;
   }
 
-  // Speaker boost (ElevenLabs).
-  $('vsSpeakerBoostRow').hidden = !eleven;
-  if (eleven) $('vsSpeakerBoost').checked = ps.speakerBoost !== false;
+  // Speaker boost is only available on models that advertise it.
+  const showSpeakerBoost = eleven && meta.speakerBoost;
+  $('vsSpeakerBoostRow').hidden = !showSpeakerBoost;
+  if (showSpeakerBoost) $('vsSpeakerBoost').checked = ps.speakerBoost !== false;
 
   // Hide the whole card when a provider exposes nothing (shouldn't happen — all
   // both expose at least one control — but keeps it robust).
@@ -357,12 +360,12 @@ function renderVoiceSettings() {
   $('voiceSettings').hidden = !anything;
 }
 
-function repairElevenModel(model) {
+function syncLiveElevenModel(model) {
   const key = `${currentProvider()}:${currentProviderSettings().model}:${model.id}`;
-  if (repairingModel === key) return;
-  repairingModel = key;
+  if (syncingElevenModel === key) return;
+  syncingElevenModel = key;
   void saveProviderSetting({ model: model.id, modelMeta: model }).then(() => {
-    repairingModel = '';
+    syncingElevenModel = '';
     renderVoiceSettings();
   });
 }
@@ -1264,7 +1267,7 @@ function renderInventory(inventory, authoritative = false) {
 async function initInventory() {
   const p = currentProvider();
   const cached = (await getInventoryCache())[p];
-  if (cached?.fetchedAt && cached.inventory) renderInventory(cached.inventory, true);
+  if (cached?.fetchedAt && cached.inventory) renderInventory(cached.inventory);
   else renderInventory({ voices: [], models: p === 'elevenlabs_web' ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS, source: 'fallback' });
   void refreshInventory(false);
 }
@@ -1279,7 +1282,7 @@ async function refreshInventory(manual) {
   const cache = await getInventoryCache();
   cache[p] = { fetchedAt: res.inventory.fetchedAt, inventory: res.inventory };
   await chrome.storage.local.set({ providerInventoryCache: cache });
-  if (p === currentProvider()) renderInventory(res.inventory, true);
+  if (p === currentProvider()) renderInventory(res.inventory, res.inventory.source === 'live');
   status(`Inventory refreshed (${res.inventory.source}).`);
 }
 
