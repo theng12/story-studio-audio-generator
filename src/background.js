@@ -13,8 +13,8 @@ import { getFleetPairingSecret, getSettings, getProviderSettings, providerCooldo
 import { StudioClient } from './lib/story-studio.js';
 import { sectionSlugFromFile } from './lib/naming.js';
 import { PROVIDERS, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
-import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifact, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact } from './lib/audio-artifacts.js';
-import { RECOVERY_REVIEW_MESSAGE, isAmbiguousBridgeFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
+import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
+import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -180,16 +180,6 @@ async function produceAudio(job, settings) {
 // Save already-generated audio; retries of this function never call a provider.
 async function saveAudio(job, { base64, mime }, settings) {
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
-  if (job.target === 'download') {
-    const filename = `${String(job.downloadPath || 'StoryStudioAudio/Standalone/audio.mp3').replace(/\.(mp3|wav)$/i, '')}.${ext}`;
-    const downloadId = await chrome.downloads.download({
-      url: `data:${mime};base64,${base64}`,
-      filename,
-      saveAs: false,
-      conflictAction: 'uniquify',
-    });
-    return { downloadId, savedAs: filename, target: 'download' };
-  }
   if (!job.slug || !job.episodeCode || !job.sectionSlug) {
     throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
   }
@@ -220,6 +210,43 @@ async function saveAudio(job, { base64, mime }, settings) {
   }
   const j = await res.json();
   return { savedAs: j.saved_as, savedIn: j.audio_dir };
+}
+
+async function startDownload(job, { base64, mime }) {
+  const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
+  const filename = `${String(job.downloadPath || 'StoryStudioAudio/Standalone/audio.mp3').replace(/\.(mp3|wav)$/i, '')}.${ext}`;
+  const downloadId = await chrome.downloads.download({
+    url: `data:${mime};base64,${base64}`,
+    filename,
+    saveAs: false,
+    conflictAction: 'uniquify',
+  });
+  return { downloadId, savedAs: filename, target: 'download' };
+}
+
+async function observeDownload(downloadId) {
+  const [download] = await chrome.downloads.search({ id: downloadId });
+  if (!download) throw new Error(`Download ${downloadId} is no longer available.`);
+  if (download.state === 'complete') return { savedAs: download.filename || '', target: 'download' };
+  if (download.state === 'interrupted') throw Object.assign(new Error(`Download interrupted: ${download.error || 'unknown error'}`), { downloadInterrupted: true });
+  await new Promise((resolve, reject) => {
+    const finish = (error) => {
+      chrome.downloads.onChanged.removeListener(listener);
+      error ? reject(error) : resolve();
+    };
+    const listener = (delta) => {
+      if (delta.id !== downloadId || !delta.state?.current) return;
+      if (delta.state.current === 'complete') finish();
+      else if (delta.state.current === 'interrupted') finish(Object.assign(new Error(`Download interrupted: ${delta.error?.current || 'unknown error'}`), { downloadInterrupted: true }));
+    };
+    chrome.downloads.onChanged.addListener(listener);
+    chrome.downloads.search({ id: downloadId }).then(([latest]) => {
+      if (latest?.state === 'complete') finish();
+      else if (latest?.state === 'interrupted') finish(Object.assign(new Error(`Download interrupted: ${latest.error || 'unknown error'}`), { downloadInterrupted: true }));
+    }).catch(finish);
+  });
+  const [completed] = await chrome.downloads.search({ id: downloadId });
+  return { savedAs: completed?.filename || '', target: 'download' };
 }
 
 // ── status (persisted so the panel survives close/reopen) ───────────────────
@@ -348,6 +375,7 @@ async function enqueue(items) {
   if (!q.some((i) => i.status === 'pending' || i.status === 'running')) {
     const previous = q;
     q = [];
+    await setQueue(q);
     await cleanDiscardedArtifacts(previous, q);
     await setQueuePaused(false);
     await chrome.storage.local.remove(NEXT_RUN_KEY);
@@ -384,8 +412,8 @@ async function enqueue(items) {
 async function removeFromQueue(id) {
   const q = await getQueue();
   const next = q.filter((i) => !(i.id === id && i.status === 'pending'));
-  await cleanDiscardedArtifacts(q, next);
   await setQueue(next);
+  await cleanDiscardedArtifacts(q, next);
   return { ok: true };
 }
 
@@ -530,24 +558,44 @@ async function processQueue() {
           target: item.target || 'project',
           downloadPath: item.downloadPath,
         };
-        let audio;
-        if (workKind === 'save') {
-          audio = await getAudioArtifact(caches, item.artifact);
-          if (!audio) throw Object.assign(new Error(`${RECOVERY_REVIEW_MESSAGE} The saved audio artifact is no longer available.`), { ambiguous: true });
+        let r;
+        if (workKind === 'download') {
+          r = await observeDownload(item.downloadId);
         } else {
-          const text = await fetchItemText(item, client);
-          if (!text.trim()) throw new Error('no script text on disk');
-          job.text = text;
-          audio = await produceAudio(job, settings);
-          const descriptor = await putAudioArtifact(caches, artifactDescriptor(item.id, audio.mime), audio);
-          q = await getQueue();
-          const generated = q.find((i) => i.id === item.id);
-          if (!generated || generated.status !== 'running') throw Object.assign(new Error('Queue item was removed while audio was being saved.'), { ambiguous: true });
-          generated.phase = 'saving';
-          generated.artifact = descriptor;
-          await setQueue(q);
+          let audio;
+          if (workKind === 'save') {
+            audio = await getAudioArtifact(caches, item.artifact);
+            if (!audio) throw Object.assign(new Error(`${RECOVERY_REVIEW_MESSAGE} The saved audio artifact is no longer available.`), { ambiguous: true });
+          } else {
+            const text = await fetchItemText(item, client);
+            if (!text.trim()) throw new Error('no script text on disk');
+            job.text = text;
+            audio = await produceAudio(job, settings);
+            try {
+              const descriptor = await putAudioArtifact(caches, artifactDescriptor(item.id, audio.mime), audio);
+              q = await getQueue();
+              const generated = q.find((i) => i.id === item.id);
+              if (!generated || generated.status !== 'running') throw new Error('Queue item was removed while audio was being saved.');
+              generated.phase = 'saving';
+              generated.artifact = descriptor;
+              await setQueue(q);
+            } catch (error) {
+              throw markGeneratedAudioPersistenceFailure(error);
+            }
+          }
+          if (job.target === 'download') {
+            const started = await startDownload(job, audio);
+            q = await getQueue();
+            const downloading = q.find((i) => i.id === item.id);
+            if (!downloading || downloading.status !== 'running') throw new Error('Queue item was removed while the download was starting.');
+            downloading.phase = 'downloading';
+            downloading.downloadId = started.downloadId;
+            await setQueue(q);
+            r = await observeDownload(started.downloadId);
+          } else {
+            r = await saveAudio(job, audio, settings);
+          }
         }
-        const r = await saveAudio(job, audio, settings);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
         if (it) {
@@ -563,11 +611,25 @@ async function processQueue() {
           it.finishedAt = Date.now();
           it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
           await setQueue(q);
-          await deleteAudioArtifact(caches, artifact);
+          await deleteAudioArtifacts(caches, [artifact]);
         } else {
           await setQueue(q);
         }
       } catch (e) {
+        q = await getQueue();
+        const it = q.find((i) => i.id === item.id);
+        if (!canHandleInFlightFailure(it)) continue;
+        if (it && e?.ambiguous) {
+          it.status = 'failed';
+          it.error = String(e.message || RECOVERY_REVIEW_MESSAGE);
+          it.ambiguous = true;
+          it.requiresLocalReview = true;
+          it.finishedAt = Date.now();
+          it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
+          await setQueue(q);
+          await writeStatus(`${item.label}: ${it.error}`, 'info');
+          continue;
+        }
         // A detected credit/quota/rate-limit failure (.limit — see the content
         // scripts / providers.js): re-pend the item (it's not really "failed",
         // the provider just needs a break) and either hold for an auto-resume
@@ -576,8 +638,6 @@ async function processQueue() {
         if (e && e.limit) {
           const provider = item.provider || 'fish';
           const cd = providerCooldown(settings, provider);
-          q = await getQueue();
-          const it = q.find((i) => i.id === item.id);
           if (it) {
             it.status = 'pending';
             delete it.error;
@@ -608,22 +668,15 @@ async function processQueue() {
           return; // stop this tick; the alarm (auto) or manual Resume continues it
         }
         const maxRetries = Math.max(0, Number(settings.maxRetries) || 0);
-        q = await getQueue();
-        const it = q.find((i) => i.id === item.id);
-        if (it && e?.ambiguous) {
-          it.status = 'failed';
-          it.error = String(e.message || RECOVERY_REVIEW_MESSAGE);
-          it.ambiguous = true;
-          it.requiresLocalReview = true;
-          it.finishedAt = Date.now();
-          it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
-          await setQueue(q);
-          await writeStatus(`${item.label}: ${it.error}`, 'info');
-        } else if (it && (it.attempts || 0) < maxRetries) {
+        if (it && (it.attempts || 0) < maxRetries) {
           it.attempts = (it.attempts || 0) + 1;
           it.status = 'pending';
           delete it.startedAt;
           if (it.phase === 'generating') delete it.phase;
+          if (it.phase === 'downloading') {
+            it.phase = 'saving';
+            delete it.downloadId;
+          }
           await setQueue(q);
           await writeStatus(`${item.label} failed — retry ${it.attempts}/${maxRetries}…`, 'running');
           await armHumanDelay(settings);
@@ -633,6 +686,10 @@ async function processQueue() {
           it.status = 'failed';
           it.error = String(e.message || e);
           if (it.phase === 'generating') delete it.phase;
+          if (it.phase === 'downloading') {
+            it.phase = 'saving';
+            delete it.downloadId;
+          }
           it.finishedAt = Date.now();
           it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
         }
@@ -657,8 +714,8 @@ async function processQueue() {
 async function clearQueue() {
   const q = await getQueue();
   const next = q.filter((i) => i.status !== 'pending');
-  await cleanDiscardedArtifacts(q, next);
   await setQueue(next);
+  await cleanDiscardedArtifacts(q, next);
   await writeStatus('Queue cleared.', 'info');
   return { ok: true };
 }
@@ -1049,6 +1106,7 @@ async function fleetHeartbeat({ allowDisabled = false } = {}) {
     }
   }
   if (changed) await setQueue(q);
+  await sweepOrphanedAudioArtifacts(caches, q).catch(() => {});
   if (q.some((i) => i.status === 'pending') && !(await isPaused())) {
     alarmCreate();
     processQueue();

@@ -154,3 +154,19 @@ test('uses the Fish fallback only when its visible Model control cannot be read'
   assert.deepEqual(fallback.models, FISH_FALLBACK_MODELS);
   assert.deepEqual(fallback.voices, [{ id: 'voice-1', title: 'Narrator' }]);
 });
+
+test('provider bridges preserve ambiguous MAIN-world generation failures', () => {
+  for (const name of ['fish', 'eleven']) {
+    const isolated = readFileSync(new URL(`../src/content/${name}.js`, import.meta.url), 'utf8');
+    const main = readFileSync(new URL(`../src/content/${name}-main.js`, import.meta.url), 'utf8');
+    assert.match(isolated, /ambiguous: !!d\.ambiguous/);
+    assert.match(main, /ambiguous: !!e\.ambiguous/);
+    assert.match(main, /ambiguous: true/);
+  }
+});
+
+test('ElevenLabs makes partial multi-chunk generations ambiguous before quota handling', () => {
+  const source = readFileSync(new URL('../src/content/eleven-main.js', import.meta.url), 'utf8');
+  assert.match(source, /buffers\.length > 0 \|\| error\?\.submitted/);
+  assert.match(source, /catch \(error\) \{[\s\S]{0,180}ambiguous: true/);
+});

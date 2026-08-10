@@ -134,11 +134,16 @@
         normalize: false,
       },
     };
-    const r = await fetch(`${API}/task`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let r;
+    try {
+      r = await fetch(`${API}/task`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      throw Object.assign(error, { ambiguous: true });
+    }
     if (!r.ok) {
       const bodyText = await r.text().catch(() => '');
       let msg = `Generation failed (${r.status}).`;
@@ -156,9 +161,18 @@
         /insufficient|balance|credit|quota|too many requests|rate.?limit/i.test(`${msg} ${bodyText}`);
       throw Object.assign(new Error(msg), { limit });
     }
-    const buf = await r.arrayBuffer();
-    if (!buf.byteLength) throw new Error('Empty audio returned.');
-    return { base64: bufToBase64(buf), mime: format === 'wav' ? 'audio/wav' : 'audio/mpeg' };
+    let buf;
+    try {
+      buf = await r.arrayBuffer();
+    } catch (error) {
+      throw Object.assign(error, { ambiguous: true });
+    }
+    if (!buf.byteLength) throw Object.assign(new Error('Empty audio returned.'), { ambiguous: true });
+    try {
+      return { base64: bufToBase64(buf), mime: format === 'wav' ? 'audio/wav' : 'audio/mpeg' };
+    } catch (error) {
+      throw Object.assign(error, { ambiguous: true });
+    }
   }
 
   function bufToBase64(buf) {
@@ -184,7 +198,7 @@
       const result = await fn(payload || {});
       window.postMessage({ kind: RES, id, ok: true, result }, '*');
     } catch (e) {
-      window.postMessage({ kind: RES, id, ok: false, error: String(e.message || e), limit: !!e.limit }, '*');
+      window.postMessage({ kind: RES, id, ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }, '*');
     }
   });
 })();

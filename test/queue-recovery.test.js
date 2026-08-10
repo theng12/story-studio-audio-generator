@@ -4,12 +4,16 @@ import {
   artifactDescriptor,
   artifactsForDiscardedItems,
   deleteAudioArtifact,
+  deleteAudioArtifacts,
   getAudioArtifact,
   putAudioArtifact,
+  sweepOrphanedAudioArtifacts,
 } from '../src/lib/audio-artifacts.js';
 import {
   RECOVERY_REVIEW_MESSAGE,
+  canHandleInFlightFailure,
   isAmbiguousBridgeFailure,
+  markGeneratedAudioPersistenceFailure,
   recoverQueueAfterRestart,
   retryQueueItem,
   workKindForQueueItem,
@@ -43,17 +47,47 @@ test('a saving phase without its artifact can never fall through to generation',
   assert.equal(workKindForQueueItem({ id: 'missing', status: 'pending', phase: 'saving' }), 'review');
 });
 
+test('restart observes an existing download and quarantines a download without an id', () => {
+  const artifact = artifactDescriptor('download', 'audio/mpeg');
+  const { queue } = recoverQueueAfterRestart([
+    { id: 'download', status: 'running', phase: 'downloading', downloadId: 17, artifact },
+    { id: 'lost-download', status: 'running', phase: 'downloading', artifact },
+  ]);
+
+  assert.equal(workKindForQueueItem(queue[0]), 'download');
+  assert.equal(queue[0].status, 'pending');
+  assert.equal(workKindForQueueItem(queue[1]), 'review');
+  assert.equal(queue[1].requiresLocalReview, true);
+});
+
 test('retry keeps a saved artifact in the save-only path and refuses uncertain work', () => {
   const artifact = artifactDescriptor('save-failed', 'audio/mpeg');
   assert.deepEqual(retryQueueItem({ id: 'save-failed', status: 'failed', phase: 'saving', artifact, attempts: 2, error: 'Studio offline' }), {
     id: 'save-failed', status: 'pending', phase: 'saving', artifact, attempts: 0,
   });
   assert.equal(retryQueueItem({ id: 'unknown', status: 'failed', ambiguous: true, requiresLocalReview: true }), null);
+  assert.deepEqual(retryQueueItem({ id: 'download', status: 'failed', phase: 'downloading', downloadId: 12, artifact }), {
+    id: 'download', status: 'pending', phase: 'saving', artifact, attempts: 0,
+  });
+});
+
+test('post-save failures never resurrect an already completed item', () => {
+  assert.equal(canHandleInFlightFailure({ status: 'running' }), true);
+  assert.equal(canHandleInFlightFailure({ status: 'done' }), false);
 });
 
 test('only post-submission bridge failures are treated as uncertain', () => {
   assert.equal(isAmbiguousBridgeFailure('Could not establish connection. Receiving end does not exist.'), false);
   assert.equal(isAmbiguousBridgeFailure('The message port closed before a response was received.'), true);
+});
+
+test('cache and queue persistence failures after a provider result are ambiguous', () => {
+  for (const reason of ['Cache put failed', 'Queue write failed']) {
+    const error = markGeneratedAudioPersistenceFailure(new Error(reason));
+    assert.equal(error.ambiguous, true);
+    assert.match(error.message, /Audio was generated/);
+    assert.match(error.message, new RegExp(reason));
+  }
 });
 
 test('discarded queue history identifies every cached artifact for cleanup', () => {
@@ -83,4 +117,27 @@ test('Cache Storage persists audio outside chrome.storage and returns it unchang
   assert.deepEqual(await getAudioArtifact(cacheStorage, descriptor), { base64: 'AQID', mime: 'audio/mpeg' });
   await deleteAudioArtifact(cacheStorage, descriptor);
   assert.equal(await getAudioArtifact(cacheStorage, descriptor), null);
+});
+
+test('orphan artifact sweeping keeps queued artifacts and ignores cleanup failures', async () => {
+  const retained = artifactDescriptor('retained');
+  const orphan = artifactDescriptor('orphan');
+  const failed = artifactDescriptor('failed-delete');
+  const deleted = [];
+  const cache = {
+    async keys() { return [{ url: retained.key }, { url: orphan.key }, { url: failed.key }, { url: 'https://example.test/not-audio' }]; },
+    async delete(request) {
+      const key = request.url || request;
+      if (key === failed.key) throw new Error('storage unavailable');
+      deleted.push(key);
+      return true;
+    },
+  };
+  await sweepOrphanedAudioArtifacts({ async open() { return cache; } }, [{ artifact: retained }]);
+  assert.deepEqual(deleted, [orphan.key]);
+});
+
+test('artifact cleanup failures are best-effort', async () => {
+  const descriptor = artifactDescriptor('cleanup-failure');
+  await assert.doesNotReject(deleteAudioArtifacts({ async open() { throw new Error('cache unavailable'); } }, [descriptor]));
 });

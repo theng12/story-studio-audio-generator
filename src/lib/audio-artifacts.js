@@ -42,10 +42,18 @@ export async function deleteAudioArtifact(cacheStorage, descriptor) {
 }
 
 export async function deleteAudioArtifacts(cacheStorage, descriptors) {
-  await Promise.all((descriptors || []).map((descriptor) => deleteAudioArtifact(cacheStorage, descriptor)));
+  await Promise.allSettled((descriptors || []).map((descriptor) => deleteAudioArtifact(cacheStorage, descriptor)));
 }
 
 export function artifactsForDiscardedItems(before, after) {
   const retained = new Set((after || []).map((item) => item.id));
   return (before || []).filter((item) => !retained.has(item.id)).map((item) => item.artifact).filter(Boolean);
+}
+
+export async function sweepOrphanedAudioArtifacts(cacheStorage, queue) {
+  const cache = await cacheStorage.open(CACHE_NAME);
+  const retained = new Set((queue || []).map((item) => item.artifact?.key).filter(Boolean));
+  const keys = await cache.keys();
+  const orphans = keys.filter((request) => request.url.startsWith(`${ARTIFACT_ORIGIN}/artifacts/`) && !retained.has(request.url));
+  await Promise.allSettled(orphans.map((request) => cache.delete(request)));
 }

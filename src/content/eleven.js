@@ -17,7 +17,7 @@ window.addEventListener('message', (ev) => {
   const p = pending.get(d.id);
   if (!p) return;
   pending.delete(d.id);
-  d.ok ? p.resolve(d.result) : p.reject(Object.assign(new Error(d.error || 'main-world error'), { limit: !!d.limit }));
+  d.ok ? p.resolve(d.result) : p.reject(Object.assign(new Error(d.error || 'main-world error'), { limit: !!d.limit, ambiguous: !!d.ambiguous }));
 });
 
 function callMain(op, payload, timeoutMs = 120000) {

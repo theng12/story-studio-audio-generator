@@ -48,7 +48,13 @@
 
   async function authedFetch(path, opts = {}) {
     let token = await getToken();
-    const call = (t) => fetch(`${API}${path}`, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${t}` } });
+    const call = async (t) => {
+      try {
+        return await fetch(`${API}${path}`, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${t}` } });
+      } catch (error) {
+        throw Object.assign(error, { submitted: true });
+      }
+    };
     let r = await call(token);
     if (r.status === 401) {
       const a = authData();
@@ -107,29 +113,38 @@
     if (!voice) throw new Error('Pick an ElevenLabs voice.');
     const buffers = [];
     const limit = Math.max(1, Number(maxChars) || MAX_CHARS);
-    for (const chunk of splitText(text, limit)) {
-      const body = { text: chunk, model_id: model || MODEL };
-      if (voiceSettings) body.voice_settings = voiceSettings;
-      const r = await authedFetch(`/text-to-speech/${encodeURIComponent(voice)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const bodyText = await r.text().catch(() => '');
-        // ElevenLabs returns quota_exceeded as HTTP 401 (same code as a bad key),
-        // so distinguish it by body text rather than status alone.
-        const limit =
-          r.status === 429 || /quota_exceeded|insufficient|out of credits|too many requests|rate.?limit/i.test(bodyText);
-        throw Object.assign(new Error(`ElevenLabs ${r.status}: ${bodyText.slice(0, 160)}`), { limit });
+    try {
+      for (const chunk of splitText(text, limit)) {
+        const body = { text: chunk, model_id: model || MODEL };
+        if (voiceSettings) body.voice_settings = voiceSettings;
+        const r = await authedFetch(`/text-to-speech/${encodeURIComponent(voice)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const bodyText = await r.text().catch(() => '');
+          // ElevenLabs returns quota_exceeded as HTTP 401 (same code as a bad key),
+          // so distinguish it by body text rather than status alone.
+          const limit =
+            r.status === 429 || /quota_exceeded|insufficient|out of credits|too many requests|rate.?limit/i.test(bodyText);
+          throw Object.assign(new Error(`ElevenLabs ${r.status}: ${bodyText.slice(0, 160)}`), { limit });
+        }
+        try {
+          buffers.push(await r.arrayBuffer());
+        } catch (error) {
+          throw Object.assign(error, { responseBody: true });
+        }
       }
-      buffers.push(await r.arrayBuffer());
+      const total = buffers.reduce((n, b) => n + b.byteLength, 0);
+      const merged = new Uint8Array(total);
+      let off = 0;
+      for (const b of buffers) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
+      return { base64: bufToBase64(merged.buffer), mime: 'audio/mpeg' };
+    } catch (error) {
+      if (buffers.length > 0 || error?.submitted || error?.responseBody) throw Object.assign(error, { ambiguous: true });
+      throw error;
     }
-    const total = buffers.reduce((n, b) => n + b.byteLength, 0);
-    const merged = new Uint8Array(total);
-    let off = 0;
-    for (const b of buffers) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
-    return { base64: bufToBase64(merged.buffer), mime: 'audio/mpeg' };
   }
 
   const handlers = { generate, inventory };
@@ -143,7 +158,7 @@
       const result = await fn(d.payload || {});
       window.postMessage({ kind: RES, id: d.id, ok: true, result }, '*');
     } catch (e) {
-      window.postMessage({ kind: RES, id: d.id, ok: false, error: String(e.message || e), limit: !!e.limit }, '*');
+      window.postMessage({ kind: RES, id: d.id, ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }, '*');
     }
   });
 })();

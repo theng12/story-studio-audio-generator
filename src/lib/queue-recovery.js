@@ -4,6 +4,17 @@ export function isAmbiguousBridgeFailure(error) {
   return !/receiving end does not exist/i.test(String(error?.message || error));
 }
 
+export function markGeneratedAudioPersistenceFailure(error) {
+  return Object.assign(
+    new Error(`Audio was generated, but its recovery state could not be persisted: ${error?.message || error}`),
+    { ambiguous: true },
+  );
+}
+
+export function canHandleInFlightFailure(item) {
+  return item?.status === 'running';
+}
+
 function reviewItem(item) {
   return {
     ...item,
@@ -20,7 +31,9 @@ export function recoverQueueAfterRestart(queue) {
   const recovered = (queue || []).map((item) => {
     if (item.status !== 'running') return item;
     changed = true;
-    if (item.phase === 'saving' && item.artifact?.key) return { ...item, status: 'pending' };
+    if ((item.phase === 'saving' && item.artifact?.key) || (item.phase === 'downloading' && item.downloadId)) {
+      return { ...item, status: 'pending' };
+    }
     return reviewItem(item);
   });
   return { queue: recovered, changed };
@@ -29,6 +42,7 @@ export function recoverQueueAfterRestart(queue) {
 export function workKindForQueueItem(item) {
   if (item?.ambiguous || item?.requiresLocalReview) return 'review';
   if (item?.phase === 'saving') return item.artifact?.key ? 'save' : 'review';
+  if (item?.phase === 'downloading') return item.downloadId ? 'download' : 'review';
   return 'generate';
 }
 
@@ -39,5 +53,9 @@ export function retryQueueItem(item) {
   delete next.startedAt;
   delete next.finishedAt;
   delete next.durationMs;
+  if (next.phase === 'downloading') {
+    next.phase = 'saving';
+    delete next.downloadId;
+  }
   return next;
 }
