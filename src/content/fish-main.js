@@ -69,11 +69,46 @@
       .map((option) => option.textContent || '');
   }
 
+  function fishModelOptionsVisible(control) {
+    return renderedFishModelLabels(control).length > 0;
+  }
+
+  function fishModelComboboxOpen(control) {
+    return control.getAttribute('aria-expanded') === 'true';
+  }
+
+  function dispatchFishModelPointerDown(control) {
+    const PointerDown = window.PointerEvent || MouseEvent;
+    control.dispatchEvent(new PointerDown('pointerdown', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      pointerType: 'mouse',
+    }));
+  }
+
+  function dispatchFishModelKey(control, key) {
+    control.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  }
+
   async function openFishModelCombobox(control) {
-    const wasExpanded = control.getAttribute('aria-expanded') === 'true';
-    if (!wasExpanded) {
+    const wasExpanded = fishModelComboboxOpen(control);
+    if (!wasExpanded && control.tagName !== 'SELECT') {
       control.focus();
       control.click();
+      await sleep(50);
+      if (!fishModelComboboxOpen(control) || !fishModelOptionsVisible(control)) {
+        dispatchFishModelPointerDown(control);
+        await sleep(50);
+      }
+      if (!fishModelComboboxOpen(control) || !fishModelOptionsVisible(control)) {
+        dispatchFishModelKey(control, 'Enter');
+        await sleep(50);
+      }
+      if (!fishModelComboboxOpen(control) || !fishModelOptionsVisible(control)) {
+        dispatchFishModelKey(control, 'ArrowDown');
+      }
     }
     let previous = '';
     let stableRounds = 0;
@@ -91,7 +126,10 @@
   async function closeFishModelCombobox(control, opened) {
     if (!opened) return;
     if (control.tagName === 'SELECT') control.blur();
-    else if (control.getAttribute('aria-expanded') === 'true') control.click();
+    else if (fishModelComboboxOpen(control)) {
+      control.focus();
+      dispatchFishModelKey(control, 'Escape');
+    }
     await sleep(50);
   }
 

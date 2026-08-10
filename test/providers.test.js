@@ -135,6 +135,17 @@ test('Fish inventory marks only enumerable native select options complete', () =
   assert.match(source, /return \{ labels, complete \}/);
 });
 
+test('Fish combobox discovery falls back to pointer and keyboard opening, then closes with Escape', () => {
+  const source = readFileSync(new URL('../src/content/fish-main.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function fishModelOptionsVisible\(control\)/);
+  assert.match(source, /dispatchFishModelPointerDown\(control\)/);
+  assert.match(source, /dispatchFishModelKey\(control, 'Enter'\)/);
+  assert.match(source, /dispatchFishModelKey\(control, 'ArrowDown'\)/);
+  assert.match(source, /dispatchFishModelKey\(control, 'Escape'\)/);
+  assert.doesNotMatch(source, /else if \(control\.getAttribute\('aria-expanded'\) === 'true'\) control\.click\(\);/);
+});
+
 test('ElevenLabs generation does not cap discovered model limits at 5000 characters', () => {
   const source = readFileSync(new URL('../src/content/eleven-main.js', import.meta.url), 'utf8');
 
