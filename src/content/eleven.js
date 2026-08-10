@@ -28,7 +28,7 @@ function callMain(op, payload, timeoutMs = 120000) {
     setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
-        reject(new Error(`ElevenLabs "${op}" timed out.`));
+        reject(Object.assign(new Error(`ElevenLabs "${op}" timed out.`), { ambiguous: op === 'generate' }));
       }
     }, timeoutMs);
   });
@@ -38,7 +38,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'eleven:generate') {
     callMain('generate', { text: msg.text, voice: msg.voice, model: msg.model, maxChars: msg.maxChars, voiceSettings: msg.voiceSettings })
       .then((r) => sendResponse({ ok: true, ...r }))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit }));
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }));
     return true;
   }
   if (msg?.type === 'eleven:inventory') {

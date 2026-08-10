@@ -3,6 +3,7 @@ import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { sectionSlugFromFile } from '../lib/naming.js';
 import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, modelsForProviderSettings, resolveElevenModel, resolveFishModel, snapshotProviderSettings } from '../lib/providers.js';
+import { retryQueueItem } from '../lib/queue-recovery.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
@@ -1052,6 +1053,7 @@ async function onPaceCustom() {
 
 // ── Queue view (status bar + controls + list) ────────────────────────────────
 const Q_STATUS = { pending: 'Pending', running: 'Running', done: 'Done', failed: 'Failed' };
+const isReviewRequired = (item) => !!(item?.ambiguous || item?.requiresLocalReview);
 
 // A cooldown is "active" when the live status is currently carrying one for
 // the provider it named — derived from liveStatus (pushed live via storage),
@@ -1155,7 +1157,7 @@ function renderActivityElapsed() {
 function renderQueueControls(queue, paused, coolingDown = false) {
   const active = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
   const pending = queue.filter((i) => i.status === 'pending').length;
-  const retryable = queue.some((i) => i.status === 'failed' && PROVIDERS[i.provider]);
+  const retryable = queue.some((i) => PROVIDERS[i.provider] && retryQueueItem(i));
   $('queueDetail').hidden = queue.length === 0;
   $('queueInfo').textContent = `Queue (${queue.length})`;
   const pause = $('pauseQueue');
@@ -1180,8 +1182,8 @@ function renderQueueList(queue) {
     label.textContent = it.label;
     if (it.status === 'failed' && it.error) label.title = it.error;
     const state = document.createElement('span');
-    state.className = `qstate ${it.status}`;
-    state.textContent = Q_STATUS[it.status] || 'Pending';
+    state.className = `qstate ${isReviewRequired(it) ? 'review' : it.status}`;
+    state.textContent = isReviewRequired(it) ? 'Review required' : (Q_STATUS[it.status] || 'Pending');
     li.append(number, label, state);
     const actions = document.createElement('div');
     actions.className = 'qactions';
@@ -1192,7 +1194,7 @@ function renderQueueList(queue) {
       x.title = 'Remove from queue';
       x.dataset.id = it.id;
       actions.appendChild(x);
-    } else if (it.status === 'failed' && PROVIDERS[it.provider]) {
+    } else if (it.status === 'failed' && PROVIDERS[it.provider] && !isReviewRequired(it)) {
       const r = document.createElement('button');
       r.className = 'qretry';
       r.textContent = '↻';

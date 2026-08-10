@@ -13,6 +13,8 @@ import { getFleetPairingSecret, getSettings, getProviderSettings, providerCooldo
 import { StudioClient } from './lib/story-studio.js';
 import { sectionSlugFromFile } from './lib/naming.js';
 import { PROVIDERS, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
+import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifact, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact } from './lib/audio-artifacts.js';
+import { RECOVERY_REVIEW_MESSAGE, isAmbiguousBridgeFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -135,9 +137,14 @@ async function ensureProviderTab(p) {
 }
 
 async function send(tabId, message) {
-  const res = await chrome.tabs.sendMessage(tabId, message);
+  let res;
+  try {
+    res = await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    throw Object.assign(new Error(`Provider connection failed: ${error?.message || error}`), { ambiguous: isAmbiguousBridgeFailure(error) });
+  }
   if (!res || !res.ok)
-    throw Object.assign(new Error(res?.error || 'No response from the provider page.'), { limit: !!res?.limit });
+    throw Object.assign(new Error(res?.error || 'No response from the provider page.'), { limit: !!res?.limit, ambiguous: !!res?.ambiguous });
   return res;
 }
 
@@ -170,9 +177,8 @@ async function produceAudio(job, settings) {
   });
 }
 
-// Generate one section's audio and save it to Story Studio or Downloads.
-async function generateAndSave(job, settings) {
-  const { base64, mime } = await produceAudio(job, settings);
+// Save already-generated audio; retries of this function never call a provider.
+async function saveAudio(job, { base64, mime }, settings) {
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
   if (job.target === 'download') {
     const filename = `${String(job.downloadPath || 'StoryStudioAudio/Standalone/audio.mp3').replace(/\.(mp3|wav)$/i, '')}.${ext}`;
@@ -304,6 +310,10 @@ async function setQueue(q) {
   await writeFleetRevision({ [QUEUE_KEY]: q });
 }
 
+async function cleanDiscardedArtifacts(before, after) {
+  await deleteAudioArtifacts(caches, artifactsForDiscardedItems(before, after));
+}
+
 async function setQueuePaused(paused, { hub = false } = {}) {
   await writeFleetRevision({ [PAUSE_KEY]: !!paused, [FLEET_HUB_PAUSE_KEY]: !!paused && !!hub });
 }
@@ -336,7 +346,9 @@ async function enqueue(items) {
   // done/failed entries don't pile up — and clear a leftover pause flag so the
   // new batch actually runs (pausing only ever applies to its own batch).
   if (!q.some((i) => i.status === 'pending' || i.status === 'running')) {
+    const previous = q;
     q = [];
+    await cleanDiscardedArtifacts(previous, q);
     await setQueuePaused(false);
     await chrome.storage.local.remove(NEXT_RUN_KEY);
   }
@@ -371,7 +383,9 @@ async function enqueue(items) {
 // Remove a single item from the queue — only if it hasn't started yet.
 async function removeFromQueue(id) {
   const q = await getQueue();
-  await setQueue(q.filter((i) => !(i.id === id && i.status === 'pending')));
+  const next = q.filter((i) => !(i.id === id && i.status === 'pending'));
+  await cleanDiscardedArtifacts(q, next);
+  await setQueue(next);
   return { ok: true };
 }
 
@@ -482,19 +496,28 @@ async function processQueue() {
       q = await getQueue();
       const currentIdx = q.findIndex((i) => i.id === pendingId && i.status === 'pending');
       if (currentIdx < 0) continue; // removed/cleared while we waited
+      const workKind = workKindForQueueItem(q[currentIdx]);
+      if (workKind === 'review') {
+        q[currentIdx].status = 'failed';
+        q[currentIdx].ambiguous = true;
+        q[currentIdx].requiresLocalReview = true;
+        q[currentIdx].error = RECOVERY_REVIEW_MESSAGE;
+        q[currentIdx].finishedAt = Date.now();
+        await setQueue(q);
+        await writeStatus(`${q[currentIdx].label}: ${RECOVERY_REVIEW_MESSAGE}`, 'info');
+        continue;
+      }
       q[currentIdx].status = 'running';
       q[currentIdx].startedAt = Date.now();
       delete q[currentIdx].finishedAt;
       delete q[currentIdx].durationMs;
+      if (workKind === 'generate') q[currentIdx].phase = 'generating';
       await setQueue(q);
       const item = q[currentIdx];
       const pos = q.filter((i) => i.status === 'done' || i.status === 'failed').length + 1;
       await writeStatus(`(${pos}/${q.length}) ${item.label}…`, 'running');
       try {
-        const text = await fetchItemText(item, client);
-        if (!text.trim()) throw new Error('no script text on disk');
         const job = {
-          text,
           provider: item.provider,
           voice: item.voice,
           autoTag: item.autoTag,
@@ -507,18 +530,43 @@ async function processQueue() {
           target: item.target || 'project',
           downloadPath: item.downloadPath,
         };
-        const r = await generateAndSave(job, settings);
+        let audio;
+        if (workKind === 'save') {
+          audio = await getAudioArtifact(caches, item.artifact);
+          if (!audio) throw Object.assign(new Error(`${RECOVERY_REVIEW_MESSAGE} The saved audio artifact is no longer available.`), { ambiguous: true });
+        } else {
+          const text = await fetchItemText(item, client);
+          if (!text.trim()) throw new Error('no script text on disk');
+          job.text = text;
+          audio = await produceAudio(job, settings);
+          const descriptor = await putAudioArtifact(caches, artifactDescriptor(item.id, audio.mime), audio);
+          q = await getQueue();
+          const generated = q.find((i) => i.id === item.id);
+          if (!generated || generated.status !== 'running') throw Object.assign(new Error('Queue item was removed while audio was being saved.'), { ambiguous: true });
+          generated.phase = 'saving';
+          generated.artifact = descriptor;
+          await setQueue(q);
+        }
+        const r = await saveAudio(job, audio, settings);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
         if (it) {
+          const artifact = it.artifact;
           it.status = 'done';
           it.savedAs = r.savedAs;
           delete it.error;
           delete it.attempts;
+          delete it.phase;
+          delete it.artifact;
+          delete it.ambiguous;
+          delete it.requiresLocalReview;
           it.finishedAt = Date.now();
           it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
+          await setQueue(q);
+          await deleteAudioArtifact(caches, artifact);
+        } else {
+          await setQueue(q);
         }
-        await setQueue(q);
       } catch (e) {
         // A detected credit/quota/rate-limit failure (.limit — see the content
         // scripts / providers.js): re-pend the item (it's not really "failed",
@@ -536,6 +584,9 @@ async function processQueue() {
             delete it.startedAt;
             delete it.finishedAt;
             delete it.durationMs;
+            delete it.phase;
+            delete it.ambiguous;
+            delete it.requiresLocalReview;
           }
           await setQueue(q);
           const name = PROVIDERS[provider]?.displayName || provider;
@@ -556,15 +607,23 @@ async function processQueue() {
           }
           return; // stop this tick; the alarm (auto) or manual Resume continues it
         }
-        // Auto-retry a generation or Studio ingest failure up to maxRetries
-        // before marking it failed.
         const maxRetries = Math.max(0, Number(settings.maxRetries) || 0);
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
-        if (it && (it.attempts || 0) < maxRetries) {
+        if (it && e?.ambiguous) {
+          it.status = 'failed';
+          it.error = String(e.message || RECOVERY_REVIEW_MESSAGE);
+          it.ambiguous = true;
+          it.requiresLocalReview = true;
+          it.finishedAt = Date.now();
+          it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
+          await setQueue(q);
+          await writeStatus(`${item.label}: ${it.error}`, 'info');
+        } else if (it && (it.attempts || 0) < maxRetries) {
           it.attempts = (it.attempts || 0) + 1;
           it.status = 'pending';
           delete it.startedAt;
+          if (it.phase === 'generating') delete it.phase;
           await setQueue(q);
           await writeStatus(`${item.label} failed — retry ${it.attempts}/${maxRetries}…`, 'running');
           await armHumanDelay(settings);
@@ -573,6 +632,7 @@ async function processQueue() {
         if (it) {
           it.status = 'failed';
           it.error = String(e.message || e);
+          if (it.phase === 'generating') delete it.phase;
           it.finishedAt = Date.now();
           it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);
         }
@@ -595,8 +655,10 @@ async function processQueue() {
 
 // Drop only pending work; preserve active, completed, and failed history.
 async function clearQueue() {
-  const q = (await getQueue()).filter((i) => i.status !== 'pending');
-  await setQueue(q);
+  const q = await getQueue();
+  const next = q.filter((i) => i.status !== 'pending');
+  await cleanDiscardedArtifacts(q, next);
+  await setQueue(next);
   await writeStatus('Queue cleared.', 'info');
   return { ok: true };
 }
@@ -622,10 +684,8 @@ async function resumeQueue() {
 function isRemotelyRetryable(item) {
   return !!(
     item &&
-    item.status === 'failed' &&
     PROVIDERS[item.provider] &&
-    !item.ambiguous &&
-    !item.requiresLocalReview
+    retryQueueItem(item)
   );
 }
 
@@ -633,20 +693,14 @@ async function retryFailed(id = null, { remote = false, ids = null } = {}) {
   const q = await getQueue();
   const selected = Array.isArray(ids) ? new Set(ids.filter((value) => typeof value === 'string')) : null;
   let retried = 0;
-  for (const it of q) {
+  for (let index = 0; index < q.length; index++) {
+    const it = q[index];
     if (it.status !== 'failed' || (id && it.id !== id)) continue;
     if (selected && !selected.has(it.id)) continue;
     if (!PROVIDERS[it.provider]) continue;
-    // An uncertain provider submission must be resolved locally. The Audio
-    // queue currently produces only normal failed states, but preserving this
-    // guard keeps future ambiguous-job handling out of remote automation.
-    if (remote && !isRemotelyRetryable(it)) continue;
-    it.status = 'pending';
-    it.attempts = 0;
-    delete it.error;
-    delete it.startedAt;
-    delete it.finishedAt;
-    delete it.durationMs;
+    const retry = retryQueueItem(it);
+    if (!retry || (remote && !isRemotelyRetryable(it))) continue;
+    q[index] = retry;
     retried++;
   }
   if (retried) {
@@ -970,12 +1024,13 @@ async function fleetHeartbeat({ allowDisabled = false } = {}) {
   }
 }
 
-// Resume after a worker restart: re-pend any item that was mid-flight when the
-// worker died, migrate legacy ElevenLabs jobs to the web-session provider, and
-// stop legacy OpenAI jobs so they are never sent to a different provider.
+// Resume safe saves after a worker restart, quarantine uncertain provider
+// submissions, migrate legacy ElevenLabs jobs, and stop retired OpenAI jobs.
 (async () => {
-  const q = await getQueue();
-  let changed = false;
+  let q = await getQueue();
+  const recovered = recoverQueueAfterRestart(q);
+  q = recovered.queue;
+  let changed = recovered.changed;
   for (const i of q) {
     if (i.provider === 'elevenlabs') {
       i.provider = 'elevenlabs_web';

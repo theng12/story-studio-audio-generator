@@ -345,6 +345,7 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding
 .qstate.running { color: var(--link); }
 .qstate.done { color: var(--ok); }
 .qstate.failed { color: var(--danger); }
+.qstate.review { color: var(--warning, var(--danger)); }
 .qremove { color: var(--danger); font-size: 13px; border: none; background: none; padding: 0 4px; cursor: pointer; }
 .qactions { display: flex; align-items: center; gap: 2px; flex: none; }
 .qretry { color: var(--link); font-size: 13px; border: none; background: none; padding: 0 4px; cursor: pointer; }

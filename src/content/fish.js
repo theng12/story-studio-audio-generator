@@ -28,7 +28,7 @@ function callMain(op, payload, timeoutMs = 120000) {
     setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
-        reject(new Error(`Fish "${op}" timed out.`));
+        reject(Object.assign(new Error(`Fish "${op}" timed out.`), { ambiguous: op === 'generate' }));
       }
     }, timeoutMs);
   });
@@ -38,7 +38,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'fish:generate') {
     callMain('generate', { text: msg.text, model: msg.voice, backend: msg.backend, speed: msg.speed, autoTag: msg.autoTag })
       .then((r) => sendResponse({ ok: true, ...r }))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit }));
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }));
     return true;
   }
   if (msg?.type === 'fish:inventory') {
