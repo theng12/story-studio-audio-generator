@@ -36,14 +36,14 @@ function callMain(op, payload, timeoutMs = 120000) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'fish:generate') {
-    callMain('generate', { text: msg.text, model: msg.voice, speed: msg.speed, autoTag: msg.autoTag })
+    callMain('generate', { text: msg.text, model: msg.voice, backend: msg.backend, speed: msg.speed, autoTag: msg.autoTag })
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit }));
     return true;
   }
-  if (msg?.type === 'fish:listVoices') {
-    callMain('listVoices', {})
-      .then((voices) => sendResponse({ ok: true, voices }))
+  if (msg?.type === 'fish:inventory') {
+    callMain('inventory', {})
+      .then((raw) => sendResponse({ ok: true, raw }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;
   }

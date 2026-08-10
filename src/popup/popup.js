@@ -2,7 +2,7 @@ import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDE
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { sectionSlugFromFile } from '../lib/naming.js';
-import { ELEVEN_MODELS, ELEVEN_STABILITY_MODES, elevenModel } from '../lib/providers.js';
+import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, resolveElevenModel, resolveFishModel } from '../lib/providers.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
@@ -27,6 +27,8 @@ let currentSections = []; // [{ slug, kind, num, label, present }] for the secti
 let studioConnectionTest = null;
 const STUDIO_CONNECTION_TEST_KEY = 'studioConnectionTest';
 let standaloneScripts = [];
+let providerInventories = {};
+let repairingModel = '';
 
 // An episode is worth showing when its script is done and (audio is missing, or
 // the user asked to also see already-done episodes for re-voicing).
@@ -42,17 +44,17 @@ async function init() {
   $('extensionVersion').title = `${manifest.name} v${manifest.version}`;
   initWhatsNew(manifest.version);
   settings = await getSettings();
+  renderProviderOptions();
   renderWorkingMode();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('workingMode').addEventListener('change', changeWorkingMode);
   $('openStudioSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openProviderPage').addEventListener('click', onOpenProviderPage);
-  $('loadVoices').addEventListener('click', loadVoices);
-  await initVoices();
+  $('loadVoices').addEventListener('click', () => refreshInventory(true));
+  await initInventory();
 
-  // Provider selector. Switching provider reloads its voices and shows the
-  // auto-tag option only for fish.audio (it's a fish-specific feature).
-  $('provider').value = settings.provider || 'fish';
+  // Provider selector. Switching keeps each provider's cached inventory visible
+  // while refreshing it from an already-open signed-in tab.
   applyProviderUI();
   wireVoiceSettings();
   renderVoiceSettings();
@@ -62,7 +64,7 @@ async function init() {
     applyProviderUI();
     renderVoiceSettings();
     renderCooldownCard();
-    await initVoices();
+    await initInventory();
   });
 
   // Auto-tag toggle.
@@ -172,6 +174,14 @@ async function init() {
   if (!isStandaloneMode()) await initStudio();
 }
 
+function renderProviderOptions() {
+  const select = $('provider');
+  select.replaceChildren(
+    ...Object.entries(PROVIDERS).map(([id, provider]) => new Option(provider.displayName, id))
+  );
+  select.value = PROVIDERS[settings.provider] ? settings.provider : Object.keys(PROVIDERS)[0];
+}
+
 function isStandaloneMode() {
   return settings?.mode === 'standalone';
 }
@@ -205,17 +215,6 @@ function updateStudioHints() {
 }
 
 // Show provider-specific UI bits (auto-tag is a fish.audio-only feature).
-const PROVIDER_NOTE = {
-  fish: 'Uses your fish.audio web plan (free). Keep a logged-in fish.audio tab.',
-  elevenlabs_web: 'Uses your logged-in elevenlabs.io session. Keep an elevenlabs.io tab open.',
-};
-// Both supported providers drive a logged-in web tab.
-const WEB_PROVIDER = { fish: 'fish.audio', elevenlabs_web: 'elevenlabs.io' };
-// Display names for provider ids — used in cooldown/limit messaging.
-const PROVIDER_LABEL = {
-  fish: 'fish.audio',
-  elevenlabs_web: 'ElevenLabs',
-};
 // ms -> "2h 15m" / "15m 32s" / "32s" — cooldowns run minutes-to-hours, unlike
 // the seconds-scale human-pace gap, so this needs the larger units too.
 function formatDuration(ms) {
@@ -230,14 +229,25 @@ function formatDuration(ms) {
 }
 function applyProviderUI() {
   const p = currentProvider();
-  $('autoTagLabel').hidden = p !== 'fish';
-  $('providerNote').textContent = PROVIDER_NOTE[p] || '';
+  const provider = PROVIDERS[p];
+  $('autoTagLabel').hidden = !provider?.capabilities?.autoTag;
+  renderInventoryStatus();
   // Web-session providers need their page open; offer a manual "open" shortcut
   // rather than the extension popping the page open when you switch providers.
-  const site = WEB_PROVIDER[p];
   const openBtn = $('openProviderPage');
-  openBtn.hidden = !site;
-  if (site) openBtn.textContent = '↗ Open workspace';
+  openBtn.hidden = !provider;
+  if (provider) openBtn.textContent = '↗ Open workspace';
+}
+
+function renderInventoryStatus() {
+  const provider = PROVIDERS[currentProvider()];
+  const source = providerInventories[currentProvider()]?.source;
+  const inventoryNote = source === 'live'
+    ? 'Inventory: live.'
+    : source === 'fallback'
+      ? 'Inventory: fallback models; live discovery is unavailable.'
+      : '';
+  $('providerNote').textContent = [provider?.uiNote, inventoryNote].filter(Boolean).join(' ');
 }
 
 // Open (or focus) the current provider's page — the only place the extension
@@ -250,12 +260,13 @@ async function onOpenProviderPage() {
 // ── Voice settings (per provider, model-aware for ElevenLabs) ────────────────
 const currentProviderSettings = () => getProviderSettings(settings, currentProvider());
 const isElevenProvider = (p) => p === 'elevenlabs_web';
+const supportsModels = (p) => !!PROVIDERS[p]?.capabilities?.models;
 const fmt2 = (v) => Number(v).toFixed(2);
 // Snap a continuous stability to v3's nearest discrete preset (0 / 0.5 / 1).
 const nearestStabilityMode = (v) =>
   [0, 0.5, 1].reduce((a, b) => (Math.abs(b - Number(v)) < Math.abs(a - Number(v)) ? b : a), 0.5);
 // Speed slider range differs between Fish and ElevenLabs.
-const speedRange = (p) => (p === 'fish' ? { min: 0.5, max: 2 } : { min: 0.7, max: 1.2 });
+const speedRange = (p) => PROVIDERS[p]?.capabilities?.speedRange || { min: 0.7, max: 1.2 };
 
 // Persist a change to the current provider's settings.
 async function saveProviderSetting(patch) {
@@ -270,21 +281,19 @@ function renderVoiceSettings() {
   const p = currentProvider();
   const ps = currentProviderSettings();
   const eleven = isElevenProvider(p);
+  const hasModels = supportsModels(p);
   let meta = null;
 
-  // Model (ElevenLabs only).
-  $('vsModelRow').hidden = !eleven;
-  if (eleven) {
+  // Model (discovered from each signed-in provider page).
+  $('vsModelRow').hidden = !hasModels;
+  if (hasModels) {
     const sel = $('vsModel');
-    if (!sel.options.length)
-      for (const m of ELEVEN_MODELS) {
-        const o = document.createElement('option');
-        o.value = m.id;
-        o.textContent = m.label;
-        sel.appendChild(o);
-      }
-    sel.value = ps.model || ELEVEN_MODELS[0].id;
-    meta = elevenModel(sel.value);
+    const models = providerInventories[p]?.models || (eleven ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS);
+    sel.replaceChildren(...models.map((m) => new Option(m.label, m.id)));
+    const resolved = eleven ? resolveElevenModel(ps.model, models) : resolveFishModel(ps.model, models);
+    sel.value = resolved.model.id;
+    meta = resolved.model;
+    if (resolved.repaired && providerInventories[p]?.authoritative) repairElevenModel(resolved.model);
   }
 
   // Stability (ElevenLabs): slider for v2/flash, discrete Creative/Natural/Robust for v3.
@@ -343,15 +352,28 @@ function renderVoiceSettings() {
   if (eleven) $('vsSpeakerBoost').checked = ps.speakerBoost !== false;
 
   // Hide the whole card when a provider exposes nothing (shouldn't happen — all
-  // four expose at least one control — but keeps it robust).
-  const anything = eleven || showSpeed;
+  // both expose at least one control — but keeps it robust).
+  const anything = hasModels || showSpeed;
   $('voiceSettings').hidden = !anything;
+}
+
+function repairElevenModel(model) {
+  const key = `${currentProvider()}:${currentProviderSettings().model}:${model.id}`;
+  if (repairingModel === key) return;
+  repairingModel = key;
+  void saveProviderSetting({ model: model.id, modelMeta: model }).then(() => {
+    repairingModel = '';
+    renderVoiceSettings();
+  });
 }
 
 // Wire the voice-setting controls (called once from init).
 function wireVoiceSettings() {
   $('vsModel').addEventListener('change', async () => {
-    await saveProviderSetting({ model: $('vsModel').value });
+    const p = currentProvider();
+    const models = providerInventories[p]?.models || (isElevenProvider(p) ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS);
+    const model = (isElevenProvider(p) ? resolveElevenModel : resolveFishModel)($('vsModel').value, models).model;
+    await saveProviderSetting({ model: model.id, modelMeta: model });
     renderVoiceSettings();
   });
   $('vsStability').addEventListener('input', () => {
@@ -378,7 +400,10 @@ function wireVoiceSettings() {
   $('vsSpeakerBoost').addEventListener('change', () => saveProviderSetting({ speakerBoost: $('vsSpeakerBoost').checked }));
   $('vsReset').addEventListener('click', async () => {
     const def = PROVIDER_SETTING_DEFAULTS[currentProvider()];
-    if (def) await saveProviderSetting({ ...def });
+    const p = currentProvider();
+    const models = providerInventories[p]?.models || (isElevenProvider(p) ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS);
+    const model = (isElevenProvider(p) ? resolveElevenModel : resolveFishModel)(def?.model, models).model;
+    if (def) await saveProviderSetting({ ...def, modelMeta: model });
     renderVoiceSettings();
   });
 }
@@ -398,7 +423,7 @@ function cooldownMinutesLabel(minutes) {
 
 function renderCooldownCard() {
   const p = currentProvider();
-  $('cooldownProviderName').textContent = `· ${PROVIDER_LABEL[p] || p}`;
+  $('cooldownProviderName').textContent = `· ${PROVIDERS[p]?.displayName || p}`;
   const cd = providerCooldown(settings, p);
   $('cooldownAutoResume').checked = !!cd.autoResume;
   $('cooldownOpts').hidden = !cd.autoResume;
@@ -455,7 +480,7 @@ function renderAppliedSettings() {
   const pace = document.createElement('span');
   pace.textContent = `⚙ Pacing ${min}–${max}s`;
   const cooldownState = document.createElement('span');
-  cooldownState.textContent = `${PROVIDER_LABEL[provider] || provider || 'Provider'} cooldown: ${cooldownText}`;
+  cooldownState.textContent = `${PROVIDERS[provider]?.displayName || provider || 'Provider'} cooldown: ${cooldownText}`;
   el.replaceChildren(pace, cooldownState);
 }
 
@@ -531,7 +556,7 @@ async function initWhatsNew(version) {
 
 // How this provider uses its web-session quota — shown before a batch starts.
 function costPhrase() {
-  return currentProvider() === 'elevenlabs_web' ? 'uses your ElevenLabs quota' : 'uses your fish.audio web plan';
+  return PROVIDERS[currentProvider()]?.quotaCopy || 'uses your provider quota';
 }
 
 // ── Story Studio workflow ──────────────────────────────────────────────────
@@ -1047,7 +1072,7 @@ function updateGenStatus(queue, paused, coolingDown = false) {
   let state = 'Idle';
   let cls = 'idle';
   if (coolingDown && left > 0) {
-    const name = PROVIDER_LABEL[liveStatus?.countdownProvider] || liveStatus?.countdownProvider || 'Provider';
+    const name = PROVIDERS[liveStatus?.countdownProvider]?.displayName || liveStatus?.countdownProvider || 'Provider';
     state = `Cooldown · ${name}`;
     cls = 'cooldown';
   } else if (left > 0 && Number(liveStatus?.countdownUntil) > Date.now()) {
@@ -1089,7 +1114,7 @@ function updateActivityPanel(queue, { done, failed, left, running, state, cls })
     : queue.length ? (failed ? 'Queue finished with issues' : 'All audio saved') : 'Ready to generate audio';
   const speed = Number(current?.providerSettings?.speed);
   const context = [
-    PROVIDER_LABEL[current?.provider] || current?.provider || 'TTS',
+    PROVIDERS[current?.provider]?.displayName || current?.provider || 'TTS',
     current?.voice ? `Voice ${current.voice}` : '',
     Number.isFinite(speed) && speed !== 1 ? `${speed.toFixed(2)}x` : '',
   ].filter(Boolean);
@@ -1120,7 +1145,7 @@ function renderActivityElapsed() {
 function renderQueueControls(queue, paused, coolingDown = false) {
   const active = queue.filter((i) => i.status === 'pending' || i.status === 'running').length;
   const pending = queue.filter((i) => i.status === 'pending').length;
-  const retryable = queue.some((i) => i.status === 'failed' && WEB_PROVIDER[i.provider]);
+  const retryable = queue.some((i) => i.status === 'failed' && PROVIDERS[i.provider]);
   $('queueDetail').hidden = queue.length === 0;
   $('queueInfo').textContent = `Queue (${queue.length})`;
   const pause = $('pauseQueue');
@@ -1157,7 +1182,7 @@ function renderQueueList(queue) {
       x.title = 'Remove from queue';
       x.dataset.id = it.id;
       actions.appendChild(x);
-    } else if (it.status === 'failed' && WEB_PROVIDER[it.provider]) {
+    } else if (it.status === 'failed' && PROVIDERS[it.provider]) {
       const r = document.createElement('button');
       r.className = 'qretry';
       r.textContent = '↻';
@@ -1184,7 +1209,7 @@ function tickCountdown() {
   if (!queueState.queue.some((i) => i.status === 'pending' || i.status === 'running')) return;
   const remaining = liveStatus.countdownUntil - Date.now();
   if (liveStatus.countdownReason === 'cooldown') {
-    const name = PROVIDER_LABEL[liveStatus.countdownProvider] || liveStatus.countdownProvider || 'Provider';
+    const name = PROVIDERS[liveStatus.countdownProvider]?.displayName || liveStatus.countdownProvider || 'Provider';
     status(remaining > 0 ? `⏸ ${name} limit reached — resuming in ${formatDuration(remaining)}…` : 'Resuming…');
     // The cooldown badge + Pause/Resume label depend on wall-clock time, not a
     // storage write, so keep them live each tick too (until the background
@@ -1209,7 +1234,7 @@ async function onQueueChanged(oldQ, newQ) {
   }
 }
 
-// ── Voices (per provider) ────────────────────────────────────────────────────
+// ── Provider inventory (per provider) ───────────────────────────────────────
 function renderVoices(voices) {
   const sel = $('voice');
   sel.innerHTML = '';
@@ -1224,30 +1249,38 @@ function renderVoices(voices) {
   if (remembered) sel.value = remembered;
 }
 
-async function getVoiceCache() {
-  return (await chrome.storage.local.get('voicesCache')).voicesCache || {};
+async function getInventoryCache() {
+  return (await chrome.storage.local.get('providerInventoryCache')).providerInventoryCache || {};
 }
 
-async function initVoices() {
-  const cache = await getVoiceCache();
-  const v = cache[currentProvider()];
-  if (Array.isArray(v) && v.length) renderVoices(v);
-  else await loadVoices();
+function renderInventory(inventory, authoritative = false) {
+  if (!inventory) return;
+  providerInventories[currentProvider()] = { ...inventory, authoritative };
+  renderVoices(inventory.voices || []);
+  renderInventoryStatus();
+  renderVoiceSettings();
 }
 
-async function loadVoices() {
+async function initInventory() {
   const p = currentProvider();
-  status(`Loading ${p} voices…`);
-  const res = await chrome.runtime.sendMessage({ type: 'listVoices', provider: p });
+  const cached = (await getInventoryCache())[p];
+  if (cached?.fetchedAt && cached.inventory) renderInventory(cached.inventory, true);
+  else renderInventory({ voices: [], models: p === 'elevenlabs_web' ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS, source: 'fallback' });
+  void refreshInventory(false);
+}
+
+async function refreshInventory(manual) {
+  const p = currentProvider();
+  status(`Refreshing ${PROVIDERS[p]?.displayName || p} inventory…`);
+  const res = await chrome.runtime.sendMessage({ type: 'providerInventory', provider: p });
   if (!res?.ok) {
-    $('voice').innerHTML = '';
-    return status(`Couldn't load ${p} voices: ${res?.error || NORESP}`);
+    return status(`Couldn't refresh ${PROVIDERS[p]?.displayName || p} inventory: ${res?.error || NORESP}`);
   }
-  const cache = await getVoiceCache();
-  cache[p] = res.voices;
-  await chrome.storage.local.set({ voicesCache: cache });
-  renderVoices(res.voices);
-  status('');
+  const cache = await getInventoryCache();
+  cache[p] = { fetchedAt: res.inventory.fetchedAt, inventory: res.inventory };
+  await chrome.storage.local.set({ providerInventoryCache: cache });
+  if (p === currentProvider()) renderInventory(res.inventory, true);
+  status(`Inventory refreshed (${res.inventory.source}).`);
 }
 
 // Styled confirmation overlay → resolves true (OK) / false (Cancel).

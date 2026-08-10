@@ -92,18 +92,22 @@
     return out;
   }
 
-  async function listVoices() {
-    const r = await authedFetch('/voices');
-    if (!r.ok) throw new Error(`ElevenLabs voices ${r.status}`);
-    const j = await r.json();
-    return (j.voices || []).map((v) => ({ id: v.voice_id, title: v.name }));
+  async function inventory() {
+    const [voicesResponse, modelsPayload] = await Promise.all([
+      authedFetch('/voices'),
+      authedFetch('/models').then(async (r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    if (!voicesResponse.ok) throw new Error(`ElevenLabs voices ${voicesResponse.status}`);
+    const voices = ((await voicesResponse.json()).voices || []).map((v) => ({ id: v.voice_id, title: v.name }));
+    return { voices, modelsPayload };
   }
 
-  async function generate({ text, voice, model, voiceSettings }) {
+  async function generate({ text, voice, model, maxChars, voiceSettings }) {
     if (!text || !text.trim()) throw new Error('No text to speak.');
     if (!voice) throw new Error('Pick an ElevenLabs voice.');
     const buffers = [];
-    for (const chunk of splitText(text, MAX_CHARS)) {
+    const limit = Math.max(1, Math.min(MAX_CHARS, Number(maxChars) || MAX_CHARS));
+    for (const chunk of splitText(text, limit)) {
       const body = { text: chunk, model_id: model || MODEL };
       if (voiceSettings) body.voice_settings = voiceSettings;
       const r = await authedFetch(`/text-to-speech/${encodeURIComponent(voice)}`, {
@@ -128,7 +132,7 @@
     return { base64: bufToBase64(merged.buffer), mime: 'audio/mpeg' };
   }
 
-  const handlers = { generate, listVoices };
+  const handlers = { generate, inventory };
   window.addEventListener('message', async (ev) => {
     if (ev.source !== window) return;
     const d = ev.data;

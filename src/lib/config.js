@@ -67,12 +67,8 @@ export const DEFAULTS = {
   fleetQueueControlEnabled: false,
 };
 
-// Defaults for the per-provider tuning controls. Both providers use logged-in
-// web sessions; ElevenLabs is model-aware and Fish exposes speed.
-export const PROVIDER_SETTING_DEFAULTS = {
-  elevenlabs_web: { model: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1, speakerBoost: true },
-  fish: { speed: 1 },
-};
+export { PROVIDER_SETTING_DEFAULTS } from './providers.js';
+import { PROVIDER_SETTING_DEFAULTS } from './providers.js';
 
 // Merge a provider's saved settings over its defaults.
 export function getProviderSettings(settings, providerId) {

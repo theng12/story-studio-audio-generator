@@ -36,14 +36,14 @@ function callMain(op, payload, timeoutMs = 120000) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'eleven:generate') {
-    callMain('generate', { text: msg.text, voice: msg.voice, model: msg.model, voiceSettings: msg.voiceSettings })
+    callMain('generate', { text: msg.text, voice: msg.voice, model: msg.model, maxChars: msg.maxChars, voiceSettings: msg.voiceSettings })
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit }));
     return true;
   }
-  if (msg?.type === 'eleven:listVoices') {
-    callMain('listVoices', {})
-      .then((voices) => sendResponse({ ok: true, voices }))
+  if (msg?.type === 'eleven:inventory') {
+    callMain('inventory', {})
+      .then((raw) => sendResponse({ ok: true, raw }))
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;
   }

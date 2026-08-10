@@ -38,18 +38,40 @@
     return j.enhanced_script || text;
   }
 
-  async function listVoices() {
+  async function inventory() {
     const r = await fetch(`${API}/model?self=true&page_size=50`, {
       headers: { Authorization: `Bearer ${token()}` },
     });
     if (!r.ok) throw new Error(`Voice list failed (${r.status}).`);
     const j = await r.json();
     const arr = Array.isArray(j) ? j : j.items || [];
-    return arr.map((v) => ({ id: v._id, title: v.title }));
+    const voices = arr.map((v) => ({ id: v._id, title: v.title }));
+    return { voices, visibleModels: visibleModelLabels() };
+  }
+
+  // Read only the visible Model control and any currently rendered visible
+  // options; never inspect Fish's private application state.
+  function visibleModelLabels() {
+    const visible = (element) => !!element?.getClientRects?.().length;
+    const labels = [];
+    for (const control of document.querySelectorAll('select, [role="combobox"]')) {
+      if (!visible(control)) continue;
+      const context = `${control.getAttribute('aria-label') || ''} ${control.labels?.[0]?.textContent || ''} ${control.parentElement?.textContent || ''}`;
+      if (!/model/i.test(context)) continue;
+      if (control.tagName === 'SELECT') {
+        for (const option of control.options) labels.push(option.textContent || '');
+      } else {
+        labels.push(control.textContent || control.getAttribute('aria-label') || '');
+      }
+    }
+    for (const option of document.querySelectorAll('[role="option"]')) {
+      if (visible(option)) labels.push(option.textContent || '');
+    }
+    return labels.filter((label) => /Fish Audio S(?:2\.1 Pro|2 Pro|1)\b/i.test(label));
   }
 
   // Returns { base64, mime } for the generated audio.
-  async function generate({ text, model, speed = 1, volume = 0, format = 'mp3', autoTag = false }) {
+  async function generate({ text, model, backend, speed = 1, volume = 0, format = 'mp3', autoTag = false }) {
     if (!text || !text.trim()) throw new Error('No text to speak.');
     if (!model) throw new Error('No voice (model_id) selected.');
     if (autoTag) text = await enhance(text);
@@ -71,7 +93,7 @@
         format,
         prosody,
         latency: 'balanced',
-        backend: 's2-pro',
+        backend: backend || 's2.1-pro',
         sampler: { temperature: 1, top_p: 0.9 },
         normalize: false,
       },
@@ -113,7 +135,7 @@
     return btoa(bin);
   }
 
-  const handlers = { listVoices, generate };
+  const handlers = { inventory, generate };
 
   window.addEventListener('message', async (ev) => {
     if (ev.source !== window) return;

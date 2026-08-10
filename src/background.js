@@ -12,7 +12,7 @@
 import { getFleetPairingSecret, getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { sectionSlugFromFile } from './lib/naming.js';
-import { PROVIDERS, buildElevenVoiceSettings } from './lib/providers.js';
+import { PROVIDERS, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -82,7 +82,6 @@ try {
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     for (const p of Object.values(PROVIDERS)) {
-      if (p.type !== 'webSession') continue;
       const tabs = await chrome.tabs.query({ url: p.origin });
       for (const t of tabs) chrome.tabs.reload(t.id);
     }
@@ -111,7 +110,7 @@ async function openProviderPage(providerId) {
     await chrome.windows.update(tabs[0].windowId, { focused: true }).catch(() => {});
     return { ok: true, opened: false };
   }
-  await chrome.tabs.create({ url: p.appUrl, active: true });
+  await chrome.tabs.create({ url: p.workspaceUrl, active: true });
   return { ok: true, opened: true };
 }
 
@@ -122,7 +121,7 @@ async function ensureProviderTab(p) {
   const tabs = await chrome.tabs.query({ url: p.origin });
   const ready = tabs.find((t) => t.status === 'complete');
   if (ready) return ready;
-  const tab = tabs[0] || (await chrome.tabs.create({ url: p.appUrl, active: false }));
+  const tab = tabs[0] || (await chrome.tabs.create({ url: p.workspaceUrl, active: false }));
   await new Promise((resolve) => {
     const listener = (tabId, info) => {
       if (tabId === tab.id && info.status === 'complete') {
@@ -151,13 +150,13 @@ async function produceAudio(job, settings) {
 
   // Per-provider tuning (model + voice settings / speed): the item's snapshot
   // from when it was queued, or the current settings for a fresh call.
-  const ps = job.providerSettings || getProviderSettings(settings, providerId);
+  const ps = { ...getProviderSettings(settings, providerId), ...(job.providerSettings || {}) };
 
   const voice = job.voice || settings.voiceByProvider?.[providerId] || (providerId === 'fish' ? settings.fishVoice : '');
-  if (!voice) throw new Error(`No ${p.name} voice selected. Pick one in the panel.`);
+  if (!voice) throw new Error(`No ${p.displayName} voice selected. Pick one in the panel.`);
   const tab = await ensureProviderTab(p);
   return send(tab.id, {
-    type: `${p.msg}:generate`,
+    type: `${p.messageNamespace}:generate`,
     text: job.text,
     voice,
     speed: ps.speed ?? 1,
@@ -165,7 +164,9 @@ async function produceAudio(job, settings) {
     // ElevenLabs (web): model + voice_settings, built here so the content
     // script stays logic-free. fish ignores these.
     model: ps.model,
-    voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(ps, ps.model) : undefined,
+    backend: providerId === 'fish' ? ps.model || p.defaults.model : undefined,
+    maxChars: ps.modelMeta?.maxChars || p.maxChars,
+    voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(ps, ps.modelMeta || ps.model) : undefined,
   });
 }
 
@@ -252,7 +253,7 @@ async function holdForCooldown(provider, settings) {
     if (resumeAt) await clearCooldown(provider);
     return false;
   }
-  const name = PROVIDERS[provider]?.name || provider;
+  const name = PROVIDERS[provider]?.displayName || provider;
   await writeStatus(`${name} limit reached — the queue will resume automatically.`, 'info', {
     countdownUntil: resumeAt,
     countdownReason: 'cooldown',
@@ -537,7 +538,7 @@ async function processQueue() {
             delete it.durationMs;
           }
           await setQueue(q);
-          const name = PROVIDERS[provider]?.name || provider;
+          const name = PROVIDERS[provider]?.displayName || provider;
           if (cd.autoResume) {
             const resumeAt = Date.now() + cd.minutes * 60000;
             await setCooldownUntil(provider, resumeAt);
@@ -1015,14 +1016,17 @@ getSettings().then((settings) => {
   if (settings.fleetAgentEnabled) fleetHeartbeat();
 }).catch(() => {});
 
-async function listVoices(providerId) {
+async function providerInventory(providerId) {
   const p = PROVIDERS[providerId];
   if (!p) throw new Error('This provider is no longer supported.');
   // Use an already-open tab; never open one just to read the voice list.
   const tab = await findProviderTab(p);
-  if (!tab) throw new Error(`Open the ${p.name} page first (↗ Open ${p.name}), then load voices.`);
-  const { voices } = await send(tab.id, { type: `${p.msg}:listVoices` });
-  return { ok: true, voices };
+  if (!tab) throw new Error(`Open the ${p.displayName} page first (↗ Open workspace), then refresh inventory.`);
+  const response = await send(tab.id, { type: `${p.messageNamespace}:inventory` });
+  const inventory = providerId === 'elevenlabs_web'
+    ? createElevenInventory(response.raw?.modelsPayload, response.raw?.voices)
+    : createFishInventory(response.raw?.visibleModels, response.raw?.voices);
+  return { ok: true, inventory: { ...inventory, fetchedAt: Date.now() } };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -1061,8 +1065,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'getQueue':
       reply(getQueue().then(async (queue) => ({ ok: true, queue, paused: await isPaused() })));
       return true;
-    case 'listVoices':
-      reply(listVoices(msg.provider));
+    case 'providerInventory':
+      reply(providerInventory(msg.provider));
       return true;
     case 'openProviderPage':
       reply(openProviderPage(msg.provider));
