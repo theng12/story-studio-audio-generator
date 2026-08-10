@@ -9,9 +9,11 @@ import {
   createElevenInventory,
   buildElevenVoiceSettings,
   modelMetaNeedsSync,
+  modelsForProviderSettings,
   normalizeFishTtsModels,
   normalizeElevenTtsModels,
   resolveElevenModel,
+  snapshotProviderSettings,
 } from '../src/lib/providers.js';
 
 test('the registry exposes only the signed-in web providers and their UI metadata', () => {
@@ -76,11 +78,40 @@ test('normalizes only recognized visible Story Studio Audio Generator model labe
   ]);
 });
 
-test('does not treat a partial Fish model collection as live inventory', () => {
+test('marks a partial Fish model collection as non-authoritative discovery', () => {
   const inventory = createFishInventory({ complete: false, labels: ['Fish Audio S3 Pro'] });
 
-  assert.equal(inventory.source, 'fallback');
-  assert.deepEqual(inventory.models, FISH_FALLBACK_MODELS);
+  assert.equal(inventory.source, 'discovered');
+  assert.equal(inventory.complete, false);
+  assert.deepEqual(inventory.models, [{ id: 's3-pro', label: 'Fish Audio S3 Pro' }]);
+});
+
+test('keeps a saved model visible for non-authoritative discovery and snapshots the displayed Fish model', () => {
+  const saved = { model: 's2-pro', modelMeta: { id: 's2-pro', label: 'Saved S2 Pro' }, speed: 1.1 };
+  const inventory = { source: 'discovered', complete: false, models: [{ id: 's3-pro', label: 'Fish Audio S3 Pro' }] };
+
+  assert.deepEqual(modelsForProviderSettings('fish', saved, inventory), [
+    { id: 's3-pro', label: 'Fish Audio S3 Pro' },
+    { id: 's2-pro', label: 'Saved S2 Pro' },
+  ]);
+  assert.deepEqual(snapshotProviderSettings('fish', saved, inventory, 's2-pro'), saved);
+  assert.deepEqual(snapshotProviderSettings('fish', saved, inventory, 's3-pro'), {
+    model: 's3-pro',
+    modelMeta: { id: 's3-pro', label: 'Fish Audio S3 Pro' },
+    speed: 1.1,
+  });
+});
+
+test('snapshots currently displayed live ElevenLabs metadata without waiting for settings persistence', () => {
+  const saved = { model: 'account_tts', modelMeta: { id: 'account_tts', label: 'Account TTS', maxChars: 4500 }, style: 0.2 };
+  const liveModel = { id: 'account_tts', label: 'Account TTS', maxChars: 12000, style: true, speakerBoost: false, speed: false, stability: 'slider' };
+  const inventory = { source: 'live', complete: true, models: [liveModel] };
+
+  assert.deepEqual(snapshotProviderSettings('elevenlabs_web', saved, inventory, 'account_tts'), {
+    model: 'account_tts',
+    modelMeta: liveModel,
+    style: 0.2,
+  });
 });
 
 test('omits unsupported ElevenLabs controls and syncs changed live metadata', () => {

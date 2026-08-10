@@ -64,12 +64,14 @@ export function createFishInventory(modelOptions, voices = []) {
   const { labels, complete } = Array.isArray(modelOptions)
     ? { labels: modelOptions, complete: true }
     : modelOptions || {};
-  const models = complete ? normalizeFishTtsModels(labels) : [];
+  const models = normalizeFishTtsModels(labels);
+  const source = !models.length ? 'fallback' : complete ? 'live' : 'discovered';
   return {
     voices: Array.isArray(voices) ? voices : [],
     models: models.length ? models : FISH_FALLBACK_MODELS,
     capabilities: PROVIDERS.fish.capabilities,
-    source: models.length ? 'live' : 'fallback',
+    source,
+    complete: source === 'live',
   };
 }
 
@@ -114,6 +116,7 @@ export function createElevenInventory(payload, voices = []) {
     models: models.length ? models : ELEVEN_FALLBACK_MODELS,
     capabilities: PROVIDERS.elevenlabs_web.capabilities,
     source: models.length ? 'live' : 'fallback',
+    complete: models.length > 0,
   };
 }
 
@@ -125,6 +128,26 @@ export function resolveElevenModel(id, models = ELEVEN_FALLBACK_MODELS) {
 export function resolveFishModel(id, models = FISH_FALLBACK_MODELS) {
   const model = models.find((candidate) => candidate.id === id) || models[0] || FISH_FALLBACK_MODELS[0];
   return { model, repaired: model.id !== id };
+}
+
+const fallbackModelsFor = (providerId) =>
+  providerId === 'elevenlabs_web' ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS;
+
+export function modelsForProviderSettings(providerId, settings = {}, inventory) {
+  const models = inventory?.models?.length ? inventory.models : fallbackModelsFor(providerId);
+  const savedId = settings.model;
+  if (!savedId || models.some((model) => model.id === savedId) || inventory?.authoritative) return models;
+  const saved = settings.modelMeta?.id === savedId
+    ? settings.modelMeta
+    : { id: savedId, label: `${savedId} (saved)` };
+  return [...models, saved];
+}
+
+export function snapshotProviderSettings(providerId, settings = {}, inventory, displayedModelId) {
+  const models = modelsForProviderSettings(providerId, settings, inventory);
+  const resolve = providerId === 'elevenlabs_web' ? resolveElevenModel : resolveFishModel;
+  const model = resolve(displayedModelId || settings.model, models).model;
+  return { ...settings, model: model.id, modelMeta: model };
 }
 
 export function modelMetaNeedsSync(saved, live) {

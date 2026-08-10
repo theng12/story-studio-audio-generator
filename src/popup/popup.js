@@ -2,7 +2,7 @@ import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDE
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { sectionSlugFromFile } from '../lib/naming.js';
-import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, resolveElevenModel, resolveFishModel } from '../lib/providers.js';
+import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, modelsForProviderSettings, resolveElevenModel, resolveFishModel, snapshotProviderSettings } from '../lib/providers.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg) => ($('status').textContent = msg || '');
@@ -244,6 +244,8 @@ function renderInventoryStatus() {
   const source = providerInventories[currentProvider()]?.source;
   const inventoryNote = source === 'live'
     ? 'Inventory: live.'
+    : source === 'discovered'
+      ? 'Inventory: discovered models; completeness is unverified.'
     : source === 'fallback'
       ? 'Inventory: fallback models; live discovery is unavailable.'
       : '';
@@ -288,7 +290,7 @@ function renderVoiceSettings() {
   $('vsModelRow').hidden = !hasModels;
   if (hasModels) {
     const sel = $('vsModel');
-    const models = providerInventories[p]?.models || (eleven ? ELEVEN_FALLBACK_MODELS : FISH_FALLBACK_MODELS);
+    const models = modelsForProviderSettings(p, ps, providerInventories[p]);
     sel.replaceChildren(...models.map((m) => new Option(m.label, m.id)));
     const resolved = eleven ? resolveElevenModel(ps.model, models) : resolveFishModel(ps.model, models);
     sel.value = resolved.model.id;
@@ -851,9 +853,14 @@ function itemFromSection(s) {
     provider: currentProvider(),
     voice: $('voice').value,
     autoTag: $('autoTag').checked,
-    providerSettings: currentProviderSettings(),
+    providerSettings: queueProviderSettings(),
     label: `${ctx.episodeCode} ${s.label}`,
   };
+}
+
+function queueProviderSettings() {
+  const p = currentProvider();
+  return snapshotProviderSettings(p, currentProviderSettings(), providerInventories[p], supportsModels(p) ? $('vsModel').value : '');
 }
 
 const NORESP = 'no response from the background — reload the extension at chrome://extensions';
@@ -924,7 +931,7 @@ async function onQueueStandalone() {
     provider: currentProvider(),
     voice,
     autoTag: $('autoTag').checked,
-    providerSettings: currentProviderSettings(),
+    providerSettings: queueProviderSettings(),
     label: standaloneScripts.length > 1 ? `${rawLabel} ${index + 1}` : rawLabel,
     episodeCode: 'Standalone',
   }));
@@ -958,7 +965,7 @@ async function onQueueProject() {
       provider: currentProvider(),
       voice,
       autoTag: $('autoTag').checked,
-      providerSettings: currentProviderSettings(),
+      providerSettings: queueProviderSettings(),
     },
   });
   status(
@@ -1256,8 +1263,9 @@ async function getInventoryCache() {
   return (await chrome.storage.local.get('providerInventoryCache')).providerInventoryCache || {};
 }
 
-function renderInventory(inventory, authoritative = false) {
+function renderInventory(inventory, fresh = false) {
   if (!inventory) return;
+  const authoritative = fresh && inventory.source === 'live' && inventory.complete === true;
   providerInventories[currentProvider()] = { ...inventory, authoritative };
   renderVoices(inventory.voices || []);
   renderInventoryStatus();
@@ -1282,7 +1290,7 @@ async function refreshInventory(manual) {
   const cache = await getInventoryCache();
   cache[p] = { fetchedAt: res.inventory.fetchedAt, inventory: res.inventory };
   await chrome.storage.local.set({ providerInventoryCache: cache });
-  if (p === currentProvider()) renderInventory(res.inventory, res.inventory.source === 'live');
+  if (p === currentProvider()) renderInventory(res.inventory, true);
   status(`Inventory refreshed (${res.inventory.source}).`);
 }
 
