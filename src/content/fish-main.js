@@ -102,7 +102,8 @@
     if (!control) return { labels: [], complete: false };
     const { labels, opened } = await openFishModelCombobox(control);
     await closeFishModelCombobox(control, opened);
-    return labels.length ? { labels, complete: true } : { labels: [], complete: false };
+    const complete = control.tagName === 'SELECT' && labels.length > 0;
+    return { labels, complete };
   }
 
   // Returns { base64, mime } for the generated audio.

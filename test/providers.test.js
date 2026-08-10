@@ -125,13 +125,14 @@ test('omits unsupported ElevenLabs controls and syncs changed live metadata', ()
   assert.equal(modelMetaNeedsSync(model, model), false);
 });
 
-test('Fish inventory source opens and restores the visible model combobox', () => {
+test('Fish inventory marks only enumerable native select options complete', () => {
   const source = readFileSync(new URL('../src/content/fish-main.js', import.meta.url), 'utf8');
 
   assert.match(source, /openFishModelCombobox/);
   assert.match(source, /closeFishModelCombobox/);
   assert.match(source, /stableRounds/);
-  assert.match(source, /complete: true/);
+  assert.match(source, /control\.tagName === 'SELECT' && labels\.length > 0/);
+  assert.match(source, /return \{ labels, complete \}/);
 });
 
 test('ElevenLabs generation does not cap discovered model limits at 5000 characters', () => {
