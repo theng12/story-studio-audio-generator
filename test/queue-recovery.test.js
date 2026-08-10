@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   artifactDescriptor,
   artifactsForDiscardedItems,
@@ -66,7 +67,13 @@ test('retry keeps a saved artifact in the save-only path and refuses uncertain w
     id: 'save-failed', status: 'pending', phase: 'saving', artifact, attempts: 0,
   });
   assert.equal(retryQueueItem({ id: 'unknown', status: 'failed', ambiguous: true, requiresLocalReview: true }), null);
-  assert.deepEqual(retryQueueItem({ id: 'download', status: 'failed', phase: 'downloading', downloadId: 12, artifact }), {
+  assert.deepEqual(retryQueueItem({ id: 'interrupted', status: 'failed', phase: 'downloading', downloadId: 12, downloadInterrupted: true, artifact }), {
+    id: 'interrupted', status: 'pending', phase: 'saving', artifact, attempts: 0,
+  });
+  assert.deepEqual(retryQueueItem({ id: 'completed', status: 'failed', phase: 'downloading', downloadId: 13, artifact }), {
+    id: 'completed', status: 'pending', phase: 'downloading', downloadId: 13, artifact, attempts: 0,
+  });
+  assert.deepEqual(retryQueueItem({ id: 'download', status: 'failed', phase: 'saving', artifact }), {
     id: 'download', status: 'pending', phase: 'saving', artifact, attempts: 0,
   });
 });
@@ -140,4 +147,11 @@ test('orphan artifact sweeping keeps queued artifacts and ignores cleanup failur
 test('artifact cleanup failures are best-effort', async () => {
   const descriptor = artifactDescriptor('cleanup-failure');
   await assert.doesNotReject(deleteAudioArtifacts({ async open() { throw new Error('cache unavailable'); } }, [descriptor]));
+});
+
+test('download launch checkpoints before Chrome accepts it and only interruptions reset it', () => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
+  assert.match(source, /downloading\.phase = 'downloading';[\s\S]{0,180}await setQueue\(q\);[\s\S]{0,180}started = await startDownload/);
+  assert.match(source, /throw markGeneratedAudioPersistenceFailure\(error\);[\s\S]{0,120}r = await observeDownload/);
+  assert.match(source, /if \(e\?\.downloadInterrupted && it\.phase === 'downloading'\)/);
 });

@@ -159,7 +159,7 @@
         r.status === 402 ||
         r.status === 429 ||
         /insufficient|balance|credit|quota|too many requests|rate.?limit/i.test(`${msg} ${bodyText}`);
-      throw Object.assign(new Error(msg), { limit });
+      throw Object.assign(new Error(msg), { limit, ambiguous: r.status === 408 || r.status >= 500 });
     }
     let buf;
     try {

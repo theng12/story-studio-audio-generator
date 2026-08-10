@@ -584,13 +584,36 @@ async function processQueue() {
             }
           }
           if (job.target === 'download') {
-            const started = await startDownload(job, audio);
             q = await getQueue();
             const downloading = q.find((i) => i.id === item.id);
             if (!downloading || downloading.status !== 'running') throw new Error('Queue item was removed while the download was starting.');
             downloading.phase = 'downloading';
-            downloading.downloadId = started.downloadId;
             await setQueue(q);
+            let started;
+            try {
+              started = await startDownload(job, audio);
+            } catch (error) {
+              try {
+                q = await getQueue();
+                const pendingSave = q.find((i) => i.id === item.id);
+                if (pendingSave?.status === 'running' && pendingSave.phase === 'downloading' && !pendingSave.downloadId) {
+                  pendingSave.phase = 'saving';
+                  await setQueue(q);
+                }
+              } catch (persistError) {
+                throw markGeneratedAudioPersistenceFailure(persistError);
+              }
+              throw error;
+            }
+            try {
+              q = await getQueue();
+              const startedDownload = q.find((i) => i.id === item.id);
+              if (!startedDownload || startedDownload.status !== 'running') throw new Error('Queue item was removed while the download was starting.');
+              startedDownload.downloadId = started.downloadId;
+              await setQueue(q);
+            } catch (error) {
+              throw markGeneratedAudioPersistenceFailure(error);
+            }
             r = await observeDownload(started.downloadId);
           } else {
             r = await saveAudio(job, audio, settings);
@@ -673,9 +696,10 @@ async function processQueue() {
           it.status = 'pending';
           delete it.startedAt;
           if (it.phase === 'generating') delete it.phase;
-          if (it.phase === 'downloading') {
+          if (e?.downloadInterrupted && it.phase === 'downloading') {
             it.phase = 'saving';
             delete it.downloadId;
+            delete it.downloadInterrupted;
           }
           await setQueue(q);
           await writeStatus(`${item.label} failed — retry ${it.attempts}/${maxRetries}…`, 'running');
@@ -686,9 +710,10 @@ async function processQueue() {
           it.status = 'failed';
           it.error = String(e.message || e);
           if (it.phase === 'generating') delete it.phase;
-          if (it.phase === 'downloading') {
+          if (e?.downloadInterrupted && it.phase === 'downloading') {
             it.phase = 'saving';
             delete it.downloadId;
+            delete it.downloadInterrupted;
           }
           it.finishedAt = Date.now();
           it.durationMs = it.finishedAt - (it.startedAt || it.finishedAt);

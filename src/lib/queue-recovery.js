@@ -53,9 +53,10 @@ export function retryQueueItem(item) {
   delete next.startedAt;
   delete next.finishedAt;
   delete next.durationMs;
-  if (next.phase === 'downloading') {
+  if (next.phase === 'downloading' && next.downloadInterrupted) {
     next.phase = 'saving';
     delete next.downloadId;
+    delete next.downloadInterrupted;
   }
   return next;
 }

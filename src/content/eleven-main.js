@@ -128,7 +128,7 @@
           // so distinguish it by body text rather than status alone.
           const limit =
             r.status === 429 || /quota_exceeded|insufficient|out of credits|too many requests|rate.?limit/i.test(bodyText);
-          throw Object.assign(new Error(`ElevenLabs ${r.status}: ${bodyText.slice(0, 160)}`), { limit });
+          throw Object.assign(new Error(`ElevenLabs ${r.status}: ${bodyText.slice(0, 160)}`), { limit, ambiguous: r.status === 408 || r.status >= 500 });
         }
         try {
           buffers.push(await r.arrayBuffer());
@@ -142,7 +142,7 @@
       for (const b of buffers) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
       return { base64: bufToBase64(merged.buffer), mime: 'audio/mpeg' };
     } catch (error) {
-      if (buffers.length > 0 || error?.submitted || error?.responseBody) throw Object.assign(error, { ambiguous: true });
+      if (buffers.length > 0 || error?.submitted || error?.responseBody || error?.ambiguous) throw Object.assign(error, { ambiguous: true });
       throw error;
     }
   }

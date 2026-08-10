@@ -170,3 +170,10 @@ test('ElevenLabs makes partial multi-chunk generations ambiguous before quota ha
   assert.match(source, /buffers\.length > 0 \|\| error\?\.submitted/);
   assert.match(source, /catch \(error\) \{[\s\S]{0,180}ambiguous: true/);
 });
+
+test('provider 5xx and timeout responses are ambiguous while normal 4xx remain retryable', () => {
+  for (const name of ['fish', 'eleven']) {
+    const source = readFileSync(new URL(`../src/content/${name}-main.js`, import.meta.url), 'utf8');
+    assert.match(source, /r\.status === 408 \|\| r\.status >= 500/);
+  }
+});
