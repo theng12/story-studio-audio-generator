@@ -135,15 +135,19 @@ test('Fish inventory marks only enumerable native select options complete', () =
   assert.match(source, /return \{ labels, complete \}/);
 });
 
-test('Fish combobox discovery falls back to pointer and keyboard opening, then closes with Escape', () => {
+test('Fish combobox discovery uses visible Fish options as menu state without selection-moving keys', () => {
   const source = readFileSync(new URL('../src/content/fish-main.js', import.meta.url), 'utf8');
 
   assert.match(source, /function fishModelOptionsVisible\(control\)/);
+  assert.match(source, /function fishModelMenuOpen\(control\)/);
+  assert.match(source, /return fishModelComboboxOpen\(control\) \|\| fishModelOptionsVisible\(control\);/);
+  assert.match(source, /return labels\.filter\(isFishModelLabel\);/);
   assert.match(source, /dispatchFishModelPointerDown\(control\)/);
   assert.match(source, /dispatchFishModelKey\(control, 'Enter'\)/);
-  assert.match(source, /dispatchFishModelKey\(control, 'ArrowDown'\)/);
   assert.match(source, /dispatchFishModelKey\(control, 'Escape'\)/);
-  assert.doesNotMatch(source, /else if \(control\.getAttribute\('aria-expanded'\) === 'true'\) control\.click\(\);/);
+  assert.match(source, /new KeyboardEvent\('keyup'/);
+  assert.doesNotMatch(source, /ArrowDown/);
+  assert.doesNotMatch(source, /\boption\.click\(/);
 });
 
 test('ElevenLabs generation does not cap discovered model limits at 5000 characters', () => {
