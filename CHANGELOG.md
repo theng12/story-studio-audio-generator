@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.26 - Audio Generator cleanup
+
+- Kept Fish Audio and ElevenLabs Web generation on signed-in provider web sessions with discovered voice/model snapshots and no developer API-key route.
+- Hardened provider bridge correlation, rejected unsupported Story Studio sections, and preserved cached-audio, download, pacing, standalone, and project recovery behavior.
+- Moved Story Studio URL and username to local storage, kept the password session-only, and paused remote work for password re-entry after browser restart.
+- Replaced stale Fleet "Coming soon" copy with opt-in sanitized telemetry and signed, revision-checked queue controls.
+
 ## 0.7.25 - Dynamic web providers and safe recovery
 
 - Discover Fish Audio and ElevenLabs models from the active signed-in web

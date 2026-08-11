@@ -2,7 +2,8 @@ import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDE
 import { initTheme } from '../lib/theme.js';
 import { StudioClient } from '../lib/story-studio.js';
 import { sectionSlugFromFile } from '../lib/naming.js';
-import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, modelsForProviderSettings, resolveElevenModel, resolveFishModel, snapshotProviderSettings } from '../lib/providers.js';
+import { sectionEligibility } from '../lib/section-contracts.js';
+import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, modelsForProviderSettings, resolveElevenModel, resolveFishModel, snapshotProviderSettings, snapshotProviderJob } from '../lib/providers.js';
 import { retryQueueItem } from '../lib/queue-recovery.js';
 
 const $ = (id) => document.getElementById(id);
@@ -756,13 +757,17 @@ async function loadSections() {
 
     const cand = [];
     const seen = new Set();
+    if (missing.has('Script')) {
+      cand.push({ slug: 'Script', kind: 'script', num: null, label: 'Script', supported: true, reason: '' });
+      seen.add('Script');
+    }
     if (hasIntro || missing.has('Introduction')) {
       cand.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
       seen.add('Introduction');
     }
     for (const num of [...chapNums].sort((a, b) => a - b)) {
       const slug = `Chapter_${pad(num)}`;
-      cand.push({ slug, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}` });
+      cand.push({ slug, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}`, supported: true, reason: '' });
       seen.add(slug);
     }
     // Any missing section that isn't the intro or a Chapter_NN still gets a row
@@ -770,7 +775,8 @@ async function loadSections() {
     for (const s of missing) {
       if (seen.has(s)) continue;
       seen.add(s);
-      cand.push({ slug: s, kind: 'chapter', num: null, label: s.replace(/_/g, ' ') });
+      const eligibility = sectionEligibility(s);
+      cand.push({ slug: s, kind: eligibility.kind, num: eligibility.chapterNumber, label: s.replace(/_/g, ' '), supported: eligibility.supported, reason: eligibility.reason });
     }
     for (const s of cand) s.present = !missing.has(s.slug);
     currentSections = cand;
@@ -800,13 +806,20 @@ function renderSections() {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.dataset.slug = s.slug;
-    cb.checked = !s.present;
-    cb.disabled = s.present && !includeExisting;
+    cb.checked = !s.present && s.supported !== false;
+    cb.disabled = s.supported === false || (s.present && !includeExisting);
     cb.onchange = updateSelectionSummary;
     const lab = document.createElement('span');
     lab.className = 'seclabel';
     lab.textContent = s.label;
     row.append(cb, lab);
+    row.title = s.reason || '';
+    if (s.supported === false) {
+      const reason = document.createElement('span');
+      reason.className = 'muted';
+      reason.textContent = s.reason;
+      row.appendChild(reason);
+    }
     if (s.present) {
       const b = document.createElement('span');
       b.className = 'badge';
@@ -824,7 +837,7 @@ function selectedSections() {
       .filter((c) => c.checked && !c.disabled)
       .map((c) => c.dataset.slug)
   );
-  return currentSections.filter((s) => slugs.has(s.slug));
+  return currentSections.filter((s) => s.supported !== false && slugs.has(s.slug));
 }
 
 function updateSelectionSummary() {
@@ -844,6 +857,8 @@ function updateSelectionSummary() {
 // time, human-paced, survives the panel closing). The panel just builds items
 // — identifiers only; the worker fetches each section's text when it gets to it.
 function itemFromSection(s) {
+  if (s.supported === false) throw new Error(s.reason);
+  const { voice, providerSettings } = queueProviderSnapshot();
   return {
     kind: s.kind,
     slug: ctx.projectSlug,
@@ -852,16 +867,16 @@ function itemFromSection(s) {
     sectionSlug: s.slug,
     chapterNumber: s.num ?? null,
     provider: currentProvider(),
-    voice: $('voice').value,
+    voice,
     autoTag: $('autoTag').checked,
-    providerSettings: queueProviderSettings(),
+    providerSettings,
     label: `${ctx.episodeCode} ${s.label}`,
   };
 }
 
-function queueProviderSettings() {
-  const p = currentProvider();
-  return snapshotProviderSettings(p, currentProviderSettings(), providerInventories[p], supportsModels(p) ? $('vsModel').value : '');
+function queueProviderSnapshot() {
+  const provider = currentProvider();
+  return snapshotProviderJob(provider, currentProviderSettings(), providerInventories[provider], $('voice').value, supportsModels(provider) ? $('vsModel').value : '');
 }
 
 const NORESP = 'no response from the background — reload the extension at chrome://extensions';
@@ -924,15 +939,16 @@ async function onQueueStandalone() {
   const rawLabel = $('standaloneLabel').value.trim() || 'audio';
   const safeLabel = rawLabel.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'audio';
   const stamp = Date.now();
+  const { voice: snapshotVoice, providerSettings } = queueProviderSnapshot();
   const items = standaloneScripts.map((text, index) => ({
     kind: 'paste',
     text,
     target: 'download',
     downloadPath: `StoryStudioAudio/Standalone/${stamp}_${pad(index + 1)}_${safeLabel}.mp3`,
     provider: currentProvider(),
-    voice,
+    voice: snapshotVoice,
     autoTag: $('autoTag').checked,
-    providerSettings: queueProviderSettings(),
+    providerSettings,
     label: standaloneScripts.length > 1 ? `${rawLabel} ${index + 1}` : rawLabel,
     episodeCode: 'Standalone',
   }));
@@ -958,15 +974,16 @@ async function onQueueProject() {
   );
   if (!ok) return;
   persist(rememberVoice(voice));
+  const snapshot = queueProviderSnapshot();
   status(`Building a queue for all of ${ctx.project}…`);
   const r = await chrome.runtime.sendMessage({
     type: 'enqueueProject',
     payload: {
       slug: ctx.projectSlug,
       provider: currentProvider(),
-      voice,
+      voice: snapshot.voice,
       autoTag: $('autoTag').checked,
-      providerSettings: queueProviderSettings(),
+      providerSettings: snapshot.providerSettings,
     },
   });
   status(
@@ -981,7 +998,7 @@ async function onQueueEpisode() {
   const voice = $('voice').value;
   if (!voice) return status('Pick a voice first (↻ to load).');
   if (!ctx.projectSlug || !ctx.episodeCode) return status('Pick an episode first.');
-  const missing = currentSections.filter((s) => !s.present);
+  const missing = currentSections.filter((s) => !s.present && s.supported !== false);
   if (!missing.length) return status('This episode already has all its audio. 🎉');
   const ok = await confirmDialog(
     `Queue all ${missing.length} missing section${missing.length > 1 ? 's' : ''} of ${ctx.episodeCode}?`,

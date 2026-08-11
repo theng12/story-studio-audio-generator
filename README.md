@@ -18,10 +18,7 @@ A Chrome extension for turning Story Studio scripts into organized audio files.
 
 ## Availability
 
-Audio generation uses signed-in Fish Audio or ElevenLabs browser sessions; no
-provider API key is required. The extension discovers the available voices,
-models, capabilities, and limits from the active account when the provider
-exposes them, with conservative fallbacks when live discovery is unavailable.
+Audio generation uses supported signed-in provider web sessions; no developer API key is required. The extension discovers the account's available voices, models, controls, and limits and keeps the exact selected voice/model snapshot with each queued item.
 
 ## Install
 
@@ -33,3 +30,4 @@ exposes them, with conservative fallbacks when live discovery is unavailable.
 
 - Requires a running Story Studio workspace.
 - The queue is designed to survive closing and reopening the side panel.
+- Remote Story Studio work asks for the password again after a browser restart; queued evidence and generated audio remain available for recovery.

@@ -145,9 +145,34 @@ export function modelsForProviderSettings(providerId, settings = {}, inventory) 
 
 export function snapshotProviderSettings(providerId, settings = {}, inventory, displayedModelId) {
   const models = modelsForProviderSettings(providerId, settings, inventory);
+  if (displayedModelId && !models.some((model) => model.id === displayedModelId)) {
+    throw new Error((PROVIDERS[providerId]?.displayName || providerId) + ' model was not discovered; refresh inventory and queue again.');
+  }
   const resolve = providerId === 'elevenlabs_web' ? resolveElevenModel : resolveFishModel;
   const model = resolve(displayedModelId || settings.model, models).model;
   return { ...settings, model: model.id, modelMeta: model };
+}
+
+export function assertProviderSettingsSnapshot(providerId, settings = {}) {
+  const provider = PROVIDERS[providerId];
+  if (!provider) throw new Error('This provider is no longer supported.');
+  const modelId = String(settings.model || '');
+  const modelMeta = settings.modelMeta;
+  if (!modelId || !modelMeta || modelMeta.id !== modelId || !String(modelMeta.label || '')) {
+    throw new Error(provider.displayName + ' model was not discovered; refresh inventory and queue again.');
+  }
+  return modelMeta;
+}
+
+export function snapshotProviderJob(providerId, settings = {}, inventory, voiceId, displayedModelId = '') {
+  const providerSettings = snapshotProviderSettings(providerId, settings, inventory, displayedModelId);
+  assertProviderSettingsSnapshot(providerId, providerSettings);
+  const voice = String(voiceId || '');
+  if (!voice) throw new Error((PROVIDERS[providerId]?.displayName || providerId) + ' voice was not discovered; refresh inventory and queue again.');
+  if (inventory?.source === 'live' && inventory.complete === true && !inventory.voices.some((candidate) => candidate.id === voice)) {
+    throw new Error((PROVIDERS[providerId]?.displayName || providerId) + ' voice was not discovered; refresh inventory and queue again.');
+  }
+  return { voice, providerSettings };
 }
 
 export function modelMetaNeedsSync(saved, live) {

@@ -36,13 +36,6 @@ export class StudioClient {
     return res.json();
   }
 
-  // Returns { username, mode } — mode "local" means desktop (no login needed),
-  // "server" means a valid session cookie is present. Throws 401 if server
-  // mode and not logged in.
-  whoami() {
-    return this._json('/auth/me');
-  }
-
   // Server mode only. Sets the session cookie as a side effect.
   login(username, password) {
     return this._json('/auth/login', {

@@ -87,6 +87,10 @@ export function providerCooldown(settings, providerId) {
 }
 
 const STORAGE_KEY = 'settings';
+const STUDIO_URL_KEY = 'studioBaseUrl';
+const STUDIO_USERNAME_KEY = 'studioUsername';
+const STUDIO_PASSWORD_KEY = 'studioPassword';
+const LEGACY_CRED_KEY = 'studioCredentials';
 
 // Earlier releases offered direct API providers. Keep saved preferences usable
 // without ever sending them through a different provider unexpectedly.
@@ -109,34 +113,62 @@ function migrateLegacySettings(settings) {
 }
 
 export async function getSettings() {
-  const stored = await chrome.storage.sync.get(STORAGE_KEY);
+  const [stored, local] = await Promise.all([chrome.storage.sync.get(STORAGE_KEY), chrome.storage.local.get([STUDIO_URL_KEY, STUDIO_USERNAME_KEY])]);
   const saved = stored[STORAGE_KEY] || {};
   const migrated = migrateLegacySettings(saved);
-  if (JSON.stringify(saved) !== JSON.stringify(migrated)) {
-    await chrome.storage.sync.set({ [STORAGE_KEY]: migrated });
+  const localPatch = {};
+  if (local[STUDIO_URL_KEY] == null && migrated.studioBaseUrl != null) localPatch[STUDIO_URL_KEY] = migrated.studioBaseUrl;
+  if (local[STUDIO_USERNAME_KEY] == null && migrated.studioUsername != null) localPatch[STUDIO_USERNAME_KEY] = migrated.studioUsername;
+  if (Object.keys(localPatch).length) await chrome.storage.local.set(localPatch);
+  const next = { ...migrated };
+  delete next.studioBaseUrl;
+  delete next.studioUsername;
+  if (JSON.stringify(saved) !== JSON.stringify(next)) {
+    await chrome.storage.sync.set({ [STORAGE_KEY]: next });
   }
-  return { ...DEFAULTS, ...migrated };
+  return { ...DEFAULTS, ...next, studioBaseUrl: local[STUDIO_URL_KEY] ?? localPatch[STUDIO_URL_KEY] ?? DEFAULTS.studioBaseUrl, studioUsername: local[STUDIO_USERNAME_KEY] ?? localPatch[STUDIO_USERNAME_KEY] ?? DEFAULTS.studioUsername };
 }
 
 export async function saveSettings(patch) {
   const current = await getSettings();
-  const next = { ...current, ...patch };
-  await chrome.storage.sync.set({ [STORAGE_KEY]: next });
+  const { studioBaseUrl, studioUsername, ...syncPatch } = patch;
+  const next = { ...current, ...syncPatch, ...(studioBaseUrl === undefined ? {} : { studioBaseUrl }), ...(studioUsername === undefined ? {} : { studioUsername }) };
+  const { studioBaseUrl: _url, studioUsername: _username, ...syncNext } = next;
+  await chrome.storage.sync.set({ [STORAGE_KEY]: syncNext });
+  const localPatch = {};
+  if (studioBaseUrl !== undefined) localPatch[STUDIO_URL_KEY] = String(studioBaseUrl || '');
+  if (studioUsername !== undefined) localPatch[STUDIO_USERNAME_KEY] = String(studioUsername || '');
+  if (Object.keys(localPatch).length) await chrome.storage.local.set(localPatch);
   return next;
 }
 
 // Story Studio login, stored in LOCAL storage (not synced across machines).
 // Only needed for a remote/tailnet server — localhost bypasses auth entirely.
-const CRED_KEY = 'studioCredentials';
 const FLEET_SECRET_KEY = 'fleetPairingSecret';
 
 export async function getCredentials() {
-  const stored = await chrome.storage.local.get(CRED_KEY);
-  return stored[CRED_KEY] || { username: '', password: '' };
+  const [local, session] = await Promise.all([chrome.storage.local.get([STUDIO_USERNAME_KEY, LEGACY_CRED_KEY]), chrome.storage.session.get(STUDIO_PASSWORD_KEY)]);
+  const legacy = local[LEGACY_CRED_KEY] || {};
+  const username = String(local[STUDIO_USERNAME_KEY] ?? legacy.username ?? '');
+  const password = String(session[STUDIO_PASSWORD_KEY] ?? legacy.password ?? '');
+  if (username && local[STUDIO_USERNAME_KEY] !== username) await chrome.storage.local.set({ [STUDIO_USERNAME_KEY]: username });
+  if (password && session[STUDIO_PASSWORD_KEY] !== password) await chrome.storage.session.set({ [STUDIO_PASSWORD_KEY]: password });
+  if (local[LEGACY_CRED_KEY]) await chrome.storage.local.remove(LEGACY_CRED_KEY);
+  return { username, password };
 }
 
 export async function saveCredentials({ username, password }) {
-  await chrome.storage.local.set({ [CRED_KEY]: { username, password } });
+  await chrome.storage.local.set({ [STUDIO_USERNAME_KEY]: String(username || '') });
+  await chrome.storage.session.set({ [STUDIO_PASSWORD_KEY]: String(password || '') });
+  await chrome.storage.local.remove(LEGACY_CRED_KEY);
+}
+
+export function isLocalStudioUrl(url) {
+  try { return ['localhost', '127.0.0.1', '::1'].includes(new URL(String(url || '')).hostname.replace(/^\[|\]$/g, '')); } catch { return false; }
+}
+
+export function requiresStudioPassword(item, settings, password) {
+  return !!(item?.slug && item.target !== 'download' && !isLocalStudioUrl(settings?.studioBaseUrl) && !String(password || ''));
 }
 
 // Fleet pairing material is intentionally local-only. It is never included in

@@ -15,7 +15,6 @@
 
 (() => {
   const API = 'https://api.us.elevenlabs.io/v1';
-  const MODEL = 'eleven_multilingual_v2';
   const MAX_CHARS = 5000; // ElevenLabs web per-generation cap; longer text is chunked
   const REQ = 'ELEVENEXT_REQ';
   const RES = 'ELEVENEXT_RES';
@@ -111,11 +110,12 @@
   async function generate({ text, voice, model, maxChars, voiceSettings }) {
     if (!text || !text.trim()) throw new Error('No text to speak.');
     if (!voice) throw new Error('Pick an ElevenLabs voice.');
+    if (!model) throw new Error('Pick an ElevenLabs model.');
     const buffers = [];
     const limit = Math.max(1, Number(maxChars) || MAX_CHARS);
     try {
       for (const chunk of splitText(text, limit)) {
-        const body = { text: chunk, model_id: model || MODEL };
+        const body = { text: chunk, model_id: model };
         if (voiceSettings) body.voice_settings = voiceSettings;
         const r = await authedFetch(`/text-to-speech/${encodeURIComponent(voice)}`, {
           method: 'POST',

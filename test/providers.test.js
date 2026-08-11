@@ -14,7 +14,25 @@ import {
   normalizeElevenTtsModels,
   resolveElevenModel,
   snapshotProviderSettings,
+  snapshotProviderJob,
+  assertProviderSettingsSnapshot,
 } from '../src/lib/providers.js';
+
+test('snapshots the selected discovered voice and exact model metadata', () => {
+  const inventory = {
+    source: 'live', complete: true,
+    voices: [{ id: 'voice-live', title: 'Account Narrator' }],
+    models: [{ id: 'account-model', label: 'Account model', maxChars: 7200, style: true, speakerBoost: false, speed: true, stability: 'slider' }],
+  };
+  assert.deepEqual(snapshotProviderJob('elevenlabs_web', { model: 'account-model', style: 0.3 }, inventory, 'voice-live', 'account-model'), {
+    voice: 'voice-live',
+    providerSettings: { model: 'account-model', modelMeta: inventory.models[0], style: 0.3 },
+  });
+});
+
+test('rejects an incomplete queued model snapshot', () => {
+  assert.throws(() => assertProviderSettingsSnapshot('fish', { model: 's3-pro' }), /model was not discovered/i);
+});
 
 test('the registry exposes only the signed-in web providers and their UI metadata', () => {
   assert.deepEqual(Object.keys(PROVIDERS).sort(), ['elevenlabs_web', 'fish']);
@@ -171,11 +189,11 @@ test('uses the Fish fallback only when its visible Model control cannot be read'
 });
 
 test('provider bridges preserve ambiguous MAIN-world generation failures', () => {
+  const bridge = readFileSync(new URL('../src/content/bridge.js', import.meta.url), 'utf8');
   for (const name of ['fish', 'eleven']) {
-    const isolated = readFileSync(new URL(`../src/content/${name}.js`, import.meta.url), 'utf8');
     const main = readFileSync(new URL(`../src/content/${name}-main.js`, import.meta.url), 'utf8');
-    assert.match(isolated, /ambiguous: !!d\.ambiguous/);
-    assert.match(main, /ambiguous: !!e\.ambiguous/);
+    assert.match(bridge, /ambiguous: !!data\.ambiguous/);
+    assert.match(main, /createMainBridge/);
     assert.match(main, /ambiguous: true/);
   }
 });

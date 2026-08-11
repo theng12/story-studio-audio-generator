@@ -9,10 +9,11 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getFleetPairingSecret, getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
+import { getCredentials, getFleetPairingSecret, getSettings, getProviderSettings, isLocalStudioUrl, providerCooldown, requiresStudioPassword } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { sectionSlugFromFile } from './lib/naming.js';
-import { PROVIDERS, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
+import { sectionEligibility, storyStudioSection } from './lib/section-contracts.js';
+import { PROVIDERS, assertProviderSettingsSnapshot, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
 import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
 import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
 
@@ -157,23 +158,24 @@ async function produceAudio(job, settings) {
 
   // Per-provider tuning (model + voice settings / speed): the item's snapshot
   // from when it was queued, or the current settings for a fresh call.
-  const ps = { ...getProviderSettings(settings, providerId), ...(job.providerSettings || {}) };
+  const providerSettings = { ...getProviderSettings(settings, providerId), ...(job.providerSettings || {}) };
+  const modelMeta = assertProviderSettingsSnapshot(providerId, providerSettings);
 
-  const voice = job.voice || settings.voiceByProvider?.[providerId] || (providerId === 'fish' ? settings.fishVoice : '');
+  const voice = job.voice;
   if (!voice) throw new Error(`No ${p.displayName} voice selected. Pick one in the panel.`);
   const tab = await ensureProviderTab(p);
   return send(tab.id, {
     type: `${p.messageNamespace}:generate`,
     text: job.text,
     voice,
-    speed: ps.speed ?? 1,
+    speed: providerSettings.speed ?? 1,
     autoTag: !!job.autoTag,
     // ElevenLabs (web): model + voice_settings, built here so the content
     // script stays logic-free. fish ignores these.
-    model: ps.model,
-    backend: providerId === 'fish' ? ps.model || p.defaults.model : undefined,
-    maxChars: ps.modelMeta?.maxChars || p.maxChars,
-    voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(ps, ps.modelMeta || ps.model) : undefined,
+    model: providerSettings.model,
+    backend: providerId === 'fish' ? providerSettings.model : undefined,
+    maxChars: modelMeta.maxChars || p.maxChars,
+    voiceSettings: providerId === 'elevenlabs_web' ? buildElevenVoiceSettings(providerSettings, modelMeta) : undefined,
   });
 }
 
@@ -182,6 +184,10 @@ async function saveAudio(job, { base64, mime }, settings) {
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
   if (!job.slug || !job.episodeCode || !job.sectionSlug) {
     throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
+  }
+  const contract = storyStudioSection(job.sectionSlug);
+  if (!contract || contract.chapterNumber !== job.chapterNumber) {
+    throw new Error('Unsupported Story Studio section; audio was not sent to Story Studio.');
   }
   const base = (settings.studioBaseUrl || '').replace(/\/+$/, '');
   const url = `${base}/api/projects/${encodeURIComponent(job.slug)}/episodes/${encodeURIComponent(
@@ -206,7 +212,9 @@ async function saveAudio(job, { base64, mime }, settings) {
     } catch {
       /* non-JSON */
     }
-    throw new Error(`Story Studio rejected the audio: ${detail}`);
+    const error = new Error(`Story Studio rejected the audio: ${detail}`);
+    error.status = res.status;
+    throw error;
   }
   const j = await res.json();
   return { savedAs: j.saved_as, savedIn: j.audio_dir };
@@ -360,10 +368,9 @@ function itemKey(it) {
 }
 
 function isStudioQueueItem(item) {
-  return !!(
-    (item?.kind === 'paste' && typeof item.text === 'string' && item.target === 'download') ||
-    (item?.slug && item.episodeCode && item.sectionSlug && (item.kind === 'intro' || item.kind === 'chapter'))
-  );
+  if (item?.kind === 'paste') return typeof item.text === 'string' && item.target === 'download';
+  const contract = item?.sectionSlug ? storyStudioSection(item.sectionSlug) : null;
+  return !!(item?.slug && item?.episodeCode && contract && item.kind === contract.kind && item.chapterNumber === contract.chapterNumber);
 }
 
 async function enqueue(items) {
@@ -429,6 +436,7 @@ async function enqueueProject({ slug, voice, autoTag, provider, providerSettings
     (e) => e.status?.script && !e.status?.audio
   );
   const items = [];
+  let unsupported = 0;
   for (const ep of eps) {
     const code = ep.episode_code || ep.code;
     let audio;
@@ -437,11 +445,13 @@ async function enqueueProject({ slug, voice, autoTag, provider, providerSettings
     } catch {
       continue;
     }
-    for (const it of missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', voice, autoTag, provider, providerSettings: ps })) {
+    const { items: missingItems, unsupported: unsupportedItems } = missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', voice, autoTag, provider, providerSettings: ps });
+    unsupported += unsupportedItems.length;
+    for (const it of missingItems) {
       items.push(it);
     }
   }
-  return enqueue(items).then((r) => ({ ...r, episodes: eps.length }));
+  return enqueue(items).then((r) => ({ ...r, episodes: eps.length, unsupported }));
 }
 
 // Build queue items from an audio-status missing_files list.
@@ -451,34 +461,33 @@ async function enqueueProject({ slug, voice, autoTag, provider, providerSettings
 // dedupe: two missing parts of Chapter 3 collapse to ONE `Chapter_03` job,
 // which regenerates the section and fills every missing part at once.
 function missingSectionItems(missingFiles, { slug, code, title, voice, autoTag, provider, providerSettings }) {
-  const out = [];
+  const items = [];
+  const unsupported = [];
   const seen = new Set();
   for (const f of missingFiles || []) {
     const section = sectionSlugFromFile(f, code);
     if (!section || seen.has(section)) continue;
-    const isIntro = section === 'Introduction';
-    const m = section.match(/^Chapter_(\d+)$/);
-    if (!isIntro && !m) continue; // unknown section shape — no text endpoint to fetch it
+    const eligibility = sectionEligibility(section);
+    if (!eligibility.supported) { unsupported.push(eligibility); continue; }
     seen.add(section);
-    const num = isIntro ? null : parseInt(m[1], 10);
-    const numStr = isIntro ? '' : String(num).padStart(2, '0');
-    out.push(
+    const num = eligibility.chapterNumber;
+    items.push(
       mkItem({
-        kind: isIntro ? 'intro' : 'chapter',
+        kind: eligibility.kind,
         slug,
         episodeCode: code,
         episodeTitle: title,
-        sectionSlug: isIntro ? 'Introduction' : `Chapter_${numStr}`,
+        sectionSlug: eligibility.sectionSlug,
         chapterNumber: num,
         provider,
         voice,
         autoTag,
         providerSettings,
-        label: `${code} ${isIntro ? 'Introduction' : 'Ch ' + num}`,
+        label: `${code} ${eligibility.kind === 'script' ? 'Script' : eligibility.kind === 'intro' ? 'Introduction' : 'Ch ' + num}`,
       })
     );
   }
-  return out;
+  return { items, unsupported };
 }
 
 async function fetchItemText(item, client) {
@@ -490,8 +499,22 @@ async function fetchItemText(item, client) {
     const sc = await client.scriptContent(item.slug, item.episodeCode, item.episodeTitle);
     return sc?.introduction?.content || '';
   }
+  if (item.kind === 'script') {
+    const script = await client.scriptContent(item.slug, item.episodeCode, item.episodeTitle);
+    return script?.content || '';
+  }
   const res = await client.chapterContent(item.slug, item.episodeCode, item.chapterNumber, item.episodeTitle);
   return res.content || res.text || '';
+}
+
+async function preflightStudioPassword(item, settings) {
+  if (item.target === 'download' || !item.slug || isLocalStudioUrl(settings.studioBaseUrl)) return false;
+  const { password } = await getCredentials();
+  if (!requiresStudioPassword(item, settings, password)) return false;
+  await setQueuePaused(true);
+  alarmClear();
+  await writeStatus('Story Studio password required — open Settings to sign in again.', 'info');
+  return true;
 }
 
 async function processQueue() {
@@ -535,6 +558,7 @@ async function processQueue() {
         await writeStatus(`${q[currentIdx].label}: ${RECOVERY_REVIEW_MESSAGE}`, 'info');
         continue;
       }
+      if (await preflightStudioPassword(q[currentIdx], settings)) return;
       q[currentIdx].status = 'running';
       q[currentIdx].startedAt = Date.now();
       delete q[currentIdx].finishedAt;
@@ -642,6 +666,17 @@ async function processQueue() {
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
         if (!canHandleInFlightFailure(it)) continue;
+        if (it && e?.status === 401) {
+          const preserveArtifact = it.phase === 'saving' && it.artifact;
+          it.status = 'pending';
+          delete it.startedAt; delete it.finishedAt; delete it.durationMs;
+          if (!preserveArtifact) delete it.phase;
+          await setQueue(q);
+          await setQueuePaused(true);
+          alarmClear();
+          await writeStatus('Story Studio password required — open Settings to sign in again.', 'info');
+          return;
+        }
         if (it && e?.ambiguous) {
           it.status = 'failed';
           it.error = String(e.message || RECOVERY_REVIEW_MESSAGE);
@@ -957,12 +992,7 @@ async function buildFleetHeartbeatBody(settings) {
       studioConfigured: !!String(settings.studioBaseUrl || '').trim(),
       ...(detailed && stored.lastStatus ? { localStatus: trimFleetText(stored.lastStatus.text) } : {}),
     },
-    ...(detailed
-      ? {
-          retryableFailedIds: queue.filter(isRemotelyRetryable).map((item) => item.id).slice(0, 50),
-          activeCooldowns,
-        }
-      : {}),
+    ...(detailed ? { activeCooldowns } : {}),
   };
   return {
     protocolVersion: FLEET_PROTOCOL_VERSION,
@@ -972,7 +1002,7 @@ async function buildFleetHeartbeatBody(settings) {
       sessionId: FLEET_SESSION_ID,
       version: chrome.runtime.getManifest().version,
       displayName: trimFleetText(settings.fleetAgentName, 80),
-      capabilities: { actions: ['pause_after_current', 'resume_hub_pause', 'clear_pending', 'retry_failed'] },
+      capabilities: { actions: ['pause_after_current', 'resume_hub_pause', 'clear_pending'] },
       consent: { telemetry: settings.fleetAgentEnabled === true, queueControl: settings.fleetQueueControlEnabled === true },
     },
     snapshot,
@@ -1031,13 +1061,6 @@ async function executeFleetCommand(command, settings) {
       case 'clear_pending':
         await clearQueue();
         break;
-      case 'retry_failed': {
-        const itemIds = Array.isArray(command.payload?.itemIds) ? command.payload.itemIds : null;
-        if (!itemIds || !itemIds.length) return recordFleetCommandResult(commandId, 'rejected', 'retry_item_ids_required');
-        const result = await retryFailed(null, { remote: true, ids: itemIds });
-        if (!result.retried) return recordFleetCommandResult(commandId, 'rejected', 'no_retryable_failed_items');
-        break;
-      }
       default:
         return recordFleetCommandResult(commandId, 'rejected', 'unsupported_action');
     }

@@ -46,7 +46,7 @@
           <input id="studioUsername" autocomplete="username" placeholder="Your username" />
         </label>
         <label>Password <span class="muted">(remote only)</span>
-          <input id="studioPassword" type="password" autocomplete="current-password" placeholder="Stored locally" />
+          <input id="studioPassword" type="password" autocomplete="current-password" placeholder="Stored for this browser session only" />
         </label>
         <button id="login" class="btn" type="button">Sign in</button>
       </div>
@@ -88,7 +88,7 @@
         <input id="fleetQueueControlEnabled" type="checkbox" />
         <span>Allow safe Hub queue controls</span>
       </label>
-      <p class="hint">Hub controls are limited to pause-after-current, resume of a Hub pause, clear pending, and selected normal-failure retries. Provider, voice, pacing, cooldown, credentials, and site permissions remain local.</p>
+      <p class="hint">Hub controls are limited to pause-after-current, resume of a Hub pause, and clear pending. Provider, model, voice, pacing, cooldown, credentials, and site permissions remain local.</p>
     </section>
 
     <div class="row end settings-footer">
