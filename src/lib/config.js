@@ -113,12 +113,17 @@ function migrateLegacySettings(settings) {
 }
 
 export async function getSettings() {
-  const [stored, local] = await Promise.all([chrome.storage.sync.get(STORAGE_KEY), chrome.storage.local.get([STUDIO_URL_KEY, STUDIO_USERNAME_KEY])]);
+  const [stored, local, session] = await Promise.all([
+    chrome.storage.sync.get(STORAGE_KEY),
+    chrome.storage.local.get([STUDIO_URL_KEY, STUDIO_USERNAME_KEY, LEGACY_CRED_KEY]),
+    chrome.storage.session.get(STUDIO_PASSWORD_KEY),
+  ]);
   const saved = stored[STORAGE_KEY] || {};
   const migrated = migrateLegacySettings(saved);
   const localPatch = {};
   if (local[STUDIO_URL_KEY] == null && migrated.studioBaseUrl != null) localPatch[STUDIO_URL_KEY] = migrated.studioBaseUrl;
   if (local[STUDIO_USERNAME_KEY] == null && migrated.studioUsername != null) localPatch[STUDIO_USERNAME_KEY] = migrated.studioUsername;
+  const credentials = await migrateLegacyCredentials(local, session);
   if (Object.keys(localPatch).length) await chrome.storage.local.set(localPatch);
   const next = { ...migrated };
   delete next.studioBaseUrl;
@@ -126,7 +131,7 @@ export async function getSettings() {
   if (JSON.stringify(saved) !== JSON.stringify(next)) {
     await chrome.storage.sync.set({ [STORAGE_KEY]: next });
   }
-  return { ...DEFAULTS, ...next, studioBaseUrl: local[STUDIO_URL_KEY] ?? localPatch[STUDIO_URL_KEY] ?? DEFAULTS.studioBaseUrl, studioUsername: local[STUDIO_USERNAME_KEY] ?? localPatch[STUDIO_USERNAME_KEY] ?? DEFAULTS.studioUsername };
+  return { ...DEFAULTS, ...next, studioBaseUrl: local[STUDIO_URL_KEY] ?? localPatch[STUDIO_URL_KEY] ?? DEFAULTS.studioBaseUrl, studioUsername: credentials.username || localPatch[STUDIO_USERNAME_KEY] || DEFAULTS.studioUsername };
 }
 
 export async function saveSettings(patch) {
@@ -142,12 +147,15 @@ export async function saveSettings(patch) {
   return next;
 }
 
-// Story Studio login, stored in LOCAL storage (not synced across machines).
-// Only needed for a remote/tailnet server — localhost bypasses auth entirely.
+// Story Studio username stays local; its password stays session-only.
 const FLEET_SECRET_KEY = 'fleetPairingSecret';
 
 export async function getCredentials() {
   const [local, session] = await Promise.all([chrome.storage.local.get([STUDIO_USERNAME_KEY, LEGACY_CRED_KEY]), chrome.storage.session.get(STUDIO_PASSWORD_KEY)]);
+  return migrateLegacyCredentials(local, session);
+}
+
+async function migrateLegacyCredentials(local, session) {
   const legacy = local[LEGACY_CRED_KEY] || {};
   const username = String(local[STUDIO_USERNAME_KEY] ?? legacy.username ?? '');
   const password = String(session[STUDIO_PASSWORD_KEY] ?? legacy.password ?? '');
