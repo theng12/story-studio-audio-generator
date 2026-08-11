@@ -231,20 +231,9 @@
     return btoa(bin);
   }
 
-  const handlers = { inventory, generate };
-
-  window.addEventListener('message', async (ev) => {
-    if (ev.source !== window) return;
-    const d = ev.data;
-    if (!d || d.kind !== REQ) return;
-    const { id, op, payload } = d;
-    try {
-      const fn = handlers[op];
-      if (!fn) throw new Error(`Unknown op: ${op}`);
-      const result = await fn(payload || {});
-      window.postMessage({ kind: RES, id, ok: true, result }, '*');
-    } catch (e) {
-      window.postMessage({ kind: RES, id, ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }, '*');
-    }
+  window.__STORY_STUDIO_BRIDGE__.createMainBridge({
+    requestKind: REQ,
+    responseKind: RES,
+    handlers: { inventory, generate },
   });
 })();

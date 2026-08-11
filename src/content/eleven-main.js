@@ -147,18 +147,9 @@
     }
   }
 
-  const handlers = { generate, inventory };
-  window.addEventListener('message', async (ev) => {
-    if (ev.source !== window) return;
-    const d = ev.data;
-    if (!d || d.kind !== REQ) return;
-    try {
-      const fn = handlers[d.op];
-      if (!fn) throw new Error(`Unknown op: ${d.op}`);
-      const result = await fn(d.payload || {});
-      window.postMessage({ kind: RES, id: d.id, ok: true, result }, '*');
-    } catch (e) {
-      window.postMessage({ kind: RES, id: d.id, ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }, '*');
-    }
+  window.__STORY_STUDIO_BRIDGE__.createMainBridge({
+    requestKind: REQ,
+    responseKind: RES,
+    handlers: { inventory, generate },
   });
 })();
