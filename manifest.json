@@ -31,24 +31,24 @@
   "content_scripts": [
     {
       "matches": ["https://fish.audio/*"],
-      "js": ["src/content/bridge.js", "src/content/fish-main.js"],
+      "js": ["src/content/bridge-main.js", "src/content/fish-main.js"],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
       "matches": ["https://fish.audio/*"],
-      "js": ["src/content/bridge.js", "src/content/fish.js"],
+      "js": ["src/content/bridge-isolated.js", "src/content/fish.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://elevenlabs.io/*"],
-      "js": ["src/content/bridge.js", "src/content/eleven-main.js"],
+      "js": ["src/content/bridge-main.js", "src/content/eleven-main.js"],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
       "matches": ["https://elevenlabs.io/*"],
-      "js": ["src/content/bridge.js", "src/content/eleven.js"],
+      "js": ["src/content/bridge-isolated.js", "src/content/eleven.js"],
       "run_at": "document_idle"
     }
   ],
