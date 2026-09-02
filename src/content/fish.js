@@ -5,7 +5,7 @@
 // has chrome.* APIs but not the page's JS objects; the main world has the JS
 // objects but not chrome.*. They talk over window.postMessage.
 
-const bridge = window.__STORY_STUDIO_BRIDGE__.createIsolatedBridge({
+const bridge = globalThis.__STORY_STUDIO_BRIDGE__.createIsolatedBridge({
   requestKind: 'FISHEXT_REQ',
   responseKind: 'FISHEXT_RES',
   label: 'Fish',

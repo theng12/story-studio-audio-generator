@@ -25,6 +25,39 @@ test('both providers use the shared helper', () => {
   }
 });
 
+test('isolated provider consumers resolve the bridge from their isolated global', () => {
+  for (const name of ['fish', 'eleven']) {
+    let messageListener;
+    let runtimeListener;
+    const window = {
+      addEventListener(type, listener) {
+        if (type === 'message') messageListener = listener;
+      },
+      postMessage() {},
+    };
+    const context = vm.createContext({
+      window,
+      chrome: { runtime: { onMessage: { addListener(listener) { runtimeListener = listener; } } } },
+      crypto: { randomUUID: () => 'test-id' },
+      setTimeout: () => 1,
+      clearTimeout() {},
+      setInterval: () => 1,
+      clearInterval() {},
+      Uint8Array,
+      Map,
+      Promise,
+      Error,
+      Object,
+    });
+    vm.runInContext(source, context);
+    assert.ok(context.__STORY_STUDIO_BRIDGE__);
+    assert.equal(window.__STORY_STUDIO_BRIDGE__, undefined);
+    assert.doesNotThrow(() => vm.runInContext(readFileSync(new URL('../src/content/' + name + '.js', import.meta.url), 'utf8'), context));
+    assert.equal(typeof messageListener, 'function');
+    assert.equal(typeof runtimeListener, 'function');
+  }
+});
+
 test('isolated-first startup retries hello until a later MAIN bridge can correlate a call', async () => {
   const listeners = [];
   const window = {

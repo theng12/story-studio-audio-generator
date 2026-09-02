@@ -5,7 +5,7 @@
 // session token). This world has chrome.* APIs but not the page's JS/session;
 // the main world has those but not chrome.*. They talk over window.postMessage.
 
-const bridge = window.__STORY_STUDIO_BRIDGE__.createIsolatedBridge({
+const bridge = globalThis.__STORY_STUDIO_BRIDGE__.createIsolatedBridge({
   requestKind: 'ELEVENEXT_REQ',
   responseKind: 'ELEVENEXT_RES',
   label: 'ElevenLabs',
