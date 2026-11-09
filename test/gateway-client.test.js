@@ -70,15 +70,19 @@ test('validateHealthResponse requires exact workerId and kind when expected', ()
   assert.deepEqual(validateHealthResponse({ ok: true, workerId: 'w1', kind: 'audio' }, { workerId: 'w1', kind: 'audio' }), { ok: true });
 });
 
-// ── Binding fingerprint ─────────────────────────────────────────────────────
+// ── Binding fingerprint (SHA-256 of URL+workerId+token) ─────────────────────
 
-test('gatewayBindingFingerprint detects config changes without leaking token', () => {
-  const fp1 = gatewayBindingFingerprint('http://gw:8080', 'worker-1');
-  const fp2 = gatewayBindingFingerprint('http://gw:9090', 'worker-1');
-  const fp3 = gatewayBindingFingerprint('http://gw:8080', 'worker-2');
-  assert.notEqual(fp1, fp2);
-  assert.notEqual(fp1, fp3);
-  assert.ok(!fp1.includes('token'));
+test('gatewayBindingFingerprint produces SHA-256 hash and detects config changes', async () => {
+  const fp1 = await gatewayBindingFingerprint('http://gw:8080', 'worker-1', 'tok-a');
+  const fp2 = await gatewayBindingFingerprint('http://gw:9090', 'worker-1', 'tok-a');
+  const fp3 = await gatewayBindingFingerprint('http://gw:8080', 'worker-2', 'tok-a');
+  const fp4 = await gatewayBindingFingerprint('http://gw:8080', 'worker-1', 'tok-b');
+  assert.notEqual(fp1, fp2, 'URL change must produce different fingerprint');
+  assert.notEqual(fp1, fp3, 'workerId change must produce different fingerprint');
+  assert.notEqual(fp1, fp4, 'token change must produce different fingerprint');
+  // Must be a hex SHA-256 (64 chars), not raw secret
+  assert.match(fp1, /^[0-9a-f]{64}$/);
+  assert.ok(!fp1.includes('tok-a'), 'hash must not contain raw token');
 });
 
 // ── Client wire routes and envelope handling (mocked fetch) ─────────────────

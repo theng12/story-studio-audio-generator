@@ -1257,7 +1257,7 @@ async function gatewayPoll() {
     await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'worker token or id missing' } });
     return;
   }
-  const currentBinding = gatewayBindingFingerprint(baseUrl, creds.workerId);
+  const currentBinding = await gatewayBindingFingerprint(baseUrl, creds.workerId, creds.token);
   const client = buildGatewayClient(baseUrl, creds.token);
 
   // Check for in-flight job from a previous run.

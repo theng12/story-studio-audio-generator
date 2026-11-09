@@ -71,14 +71,17 @@ export function validateHealthResponse(json, { workerId, kind } = {}) {
   return { ok: true };
 }
 
-// Compute a non-secret binding fingerprint from URL + workerId so we can
-// detect config changes without storing the token. Used to refuse redirecting
-// an in-flight job when credentials change mid-flight.
-export function gatewayBindingFingerprint(baseUrl, workerId) {
+// Compute a SHA-256 binding fingerprint from normalized URL + workerId + token.
+// Persisted hash only (no raw secret in logs/storage). Token change alone MUST
+// hold an in-flight job — this prevents silent redirect after credential rotation.
+export async function gatewayBindingFingerprint(baseUrl, workerId, token) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   const wid = String(workerId || '');
-  // Simple hash-free fingerprint: concat normalized values. Not secret (no token).
-  return `${base}|${wid}`;
+  const tok = String(token || '');
+  const data = new TextEncoder().encode(`${base}|${wid}|${tok}`);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export function buildGatewayClient(baseUrl, token) {
