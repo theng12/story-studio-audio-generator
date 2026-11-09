@@ -1,12 +1,15 @@
 // Gateway third-mode client — claim-based TTS worker protocol.
 //
 // Wire contract (static-only; no live server exercised here):
-//   GET  /api/workers/health              -> 200 { ok: true, workerId?, kind? }
-//   POST /api/workers/claim               <- { workerId, kind: 'audio' }
-//        -> 204 (no job) | 200 { job }    Bearer <token>
-//   POST /api/workers/progress            <- { jobId, phase, message }
-//   POST /api/workers/fail                <- { jobId, error, ambiguous? }
-//   POST /api/workers/result              <- multipart { mediaType, file }
+//   GET  /api/workers/health                                    -> 200 { ok: true, workerId, kind }
+//   POST /api/workers/claim                                     <- { workerId, kind: 'audio' }
+//        -> 204 (no job) | 200 { job: {...} }                   Bearer <token>
+//   POST /api/workers/jobs/${jobId}/progress                    <- { phase, message }
+//   POST /api/workers/jobs/${jobId}/fail                        <- { error, ambiguous }
+//   POST /api/workers/jobs/${jobId}/result                      <- multipart { mediaType, file }
+//        -> 200 { ok: true }              acknowledged
+//        -> 200 { ok: true, ignored: true } earlier terminal won; NOT acknowledged
+//        -> 200 {} or malformed           NOT acknowledged; preserve staged bytes
 //
 // This module is pure fetch + validation. It never touches chrome.storage,
 // provider tabs, or the local queue — those stay in background.js.
@@ -19,9 +22,7 @@ export const GATEWAY_KIND = 'audio';
 export const TTS_JOB_SCHEMA = Object.freeze({
   required: ['jobId', 'provider', 'voice', 'text'],
   optional: ['model', 'speed', 'autoTag', 'providerSettings'],
-  // provider must be one of the extension's known web-session providers.
   knownProviders: ['fish', 'elevenlabs_web'],
-  // Accepted result media types for TTS output.
   acceptedMediaTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav'],
 });
 
@@ -38,14 +39,11 @@ export function validateTtsJob(job, { knownVoices = [], knownModels = [] } = {})
   if (!TTS_JOB_SCHEMA.knownProviders.includes(job.provider)) {
     return { ok: false, error: `unsupported provider: ${job.provider}` };
   }
-  // Voice must be explicitly provided and, when a known set is available, must
-  // match. Never silently fall back to an account default.
   const voice = String(job.voice || '').trim();
   if (!voice) return { ok: false, error: 'missing or empty required field: voice' };
   if (knownVoices.length && !knownVoices.includes(voice)) {
     return { ok: false, error: `unsupported voice for ${job.provider}: ${voice}` };
   }
-  // Model is optional but when present must be recognized.
   if (job.model !== undefined && job.model !== null) {
     const model = String(job.model || '').trim();
     if (!model) return { ok: false, error: 'model field is empty string' };
@@ -56,19 +54,31 @@ export function validateTtsJob(job, { knownVoices = [], knownModels = [] } = {})
   return { ok: true };
 }
 
-// Validate a health response: must have ok:true and, when the server reports
-// workerId/kind, they must match the expected values. A malformed health
-// response is NOT idle — it is a connection/config error.
+// Validate a health response: ok must be exactly true (not truthy), and
+// workerId/kind must match exactly when reported. Missing identity fields
+// when expected is a validation failure, not acceptance.
 export function validateHealthResponse(json, { workerId, kind } = {}) {
   if (!json || typeof json !== 'object') return { ok: false, error: 'health response is not an object' };
-  if (!json.ok) return { ok: false, error: 'health reported not ok' };
-  if (workerId !== undefined && json.workerId !== undefined && json.workerId !== workerId) {
-    return { ok: false, error: `health workerId mismatch: expected ${workerId}, got ${json.workerId}` };
+  if (json.ok !== true) return { ok: false, error: 'health ok is not exactly true' };
+  if (workerId !== undefined) {
+    if (json.workerId === undefined) return { ok: false, error: 'health missing workerId' };
+    if (json.workerId !== workerId) return { ok: false, error: `health workerId mismatch: expected ${workerId}, got ${json.workerId}` };
   }
-  if (kind !== undefined && json.kind !== undefined && json.kind !== kind) {
-    return { ok: false, error: `health kind mismatch: expected ${kind}, got ${json.kind}` };
+  if (kind !== undefined) {
+    if (json.kind === undefined) return { ok: false, error: 'health missing kind' };
+    if (json.kind !== kind) return { ok: false, error: `health kind mismatch: expected ${kind}, got ${json.kind}` };
   }
   return { ok: true };
+}
+
+// Compute a non-secret binding fingerprint from URL + workerId so we can
+// detect config changes without storing the token. Used to refuse redirecting
+// an in-flight job when credentials change mid-flight.
+export function gatewayBindingFingerprint(baseUrl, workerId) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  const wid = String(workerId || '');
+  // Simple hash-free fingerprint: concat normalized values. Not secret (no token).
+  return `${base}|${wid}`;
 }
 
 export function buildGatewayClient(baseUrl, token) {
@@ -88,17 +98,20 @@ export function buildGatewayClient(baseUrl, token) {
     return res;
   }
 
+  function jobPath(jobId, action) {
+    return `/api/workers/jobs/${encodeURIComponent(String(jobId || ''))}/${action}`;
+  }
+
   return {
     async health() {
       const res = await request('/api/workers/health');
       if (!res.ok) throw new Error(`health check failed: ${res.status}`);
       const json = await res.json().catch(() => ({}));
-      return { ok: !!json.ok, status: res.status, raw: json };
+      return { ok: json.ok === true, status: res.status, raw: json };
     },
 
     // Claim returns null when no job is available (204), or a validated job.
-    // A malformed claim response (non-204, non-JSON, missing jobId) throws —
-    // it is NOT treated as idle.
+    // Wire returns { job: {...} }, not raw job. Malformed response throws.
     async claim(workerId) {
       const res = await request('/api/workers/claim', {
         method: 'POST',
@@ -109,47 +122,50 @@ export function buildGatewayClient(baseUrl, token) {
         const detail = await res.text().catch(() => '');
         throw new Error(`claim failed: ${res.status} ${detail}`);
       }
-      let job;
+      let envelope;
       try {
-        job = await res.json();
+        envelope = await res.json();
       } catch {
         throw new Error('claim returned non-JSON body');
       }
-      if (!job || typeof job !== 'object') throw new Error('claim returned non-object body');
-      if (!job.jobId && !job.id) throw new Error('claim returned job without jobId');
+      if (!envelope || typeof envelope !== 'object') throw new Error('claim returned non-object body');
+      const job = envelope.job;
+      if (!job || typeof job !== 'object') throw new Error('claim returned envelope without job');
+      if (!job.jobId) throw new Error('claim returned job without jobId');
       const validation = validateTtsJob(job);
       if (!validation.ok) throw new Error(`invalid tts job from gateway: ${validation.error}`);
       return job;
     },
 
+    // Progress/fail use per-job routes. Body contains only phase/message or
+    // error/ambiguous — jobId is in the URL, not the body.
     async progress(jobId, phase, message) {
-      const res = await request('/api/workers/progress', {
+      const res = await request(jobPath(jobId, 'progress'), {
         method: 'POST',
-        body: { jobId: String(jobId || ''), phase: String(phase || ''), message: String(message || '') },
+        body: { phase: String(phase || ''), message: String(message || '') },
       });
       if (!res.ok) throw new Error(`progress report failed: ${res.status}`);
       return { ok: true };
     },
 
-    async fail(jobId, error, { ambiguous = false } = {}) {
-      const res = await request('/api/workers/fail', {
+    async fail(jobId, error, { ambiguous = true } = {}) {
+      const res = await request(jobPath(jobId, 'fail'), {
         method: 'POST',
-        body: { jobId: String(jobId || ''), error: String(error || ''), ambiguous: !!ambiguous },
+        body: { error: String(error || ''), ambiguous: !!ambiguous },
       });
       if (!res.ok) throw new Error(`fail report failed: ${res.status}`);
       return { ok: true };
     },
 
-    // Result upload is multipart/form-data, not JSON. The caller provides
-    // a Blob/File and its mediaType; this function builds the form body.
-    // Returns the parsed response so the caller can detect {ok:true, ignored:true}
-    // (an earlier terminal answer already won — does NOT acknowledge artifact acceptance).
+    // Result upload is multipart/form-data via per-job route. Returns parsed
+    // response. Only explicit ok:true AND ignored!==true acknowledges delivery.
+    // Malformed/empty/refused responses are NOT acknowledged.
     async result(jobId, { mediaType, file }) {
       if (!mediaType || !file) throw new Error('result requires mediaType and file');
       const form = new FormData();
       form.append('mediaType', String(mediaType));
       form.append('file', file);
-      const url = `${base}/api/workers/result`;
+      const url = `${base}${jobPath(jobId, 'result')}`;
       const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${String(token || '')}` },
@@ -160,9 +176,14 @@ export function buildGatewayClient(baseUrl, token) {
       try {
         json = await res.json();
       } catch {
-        json = {};
+        // Malformed body on 200: NOT acknowledged. Preserve staged bytes.
+        return { ok: false, ignored: false, acknowledged: false, raw: null };
       }
-      return { ok: !!json.ok, ignored: !!json.ignored, raw: json };
+      if (!json || typeof json !== 'object') {
+        return { ok: false, ignored: false, acknowledged: false, raw: json };
+      }
+      const acknowledged = json.ok === true && json.ignored !== true;
+      return { ok: json.ok === true, ignored: json.ignored === true, acknowledged, raw: json };
     },
   };
 }

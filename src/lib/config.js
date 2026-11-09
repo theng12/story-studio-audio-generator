@@ -102,7 +102,7 @@ const LEGACY_CRED_KEY = 'studioCredentials';
 function migrateLegacySettings(settings) {
   if (!settings) return settings;
   const next = { ...settings };
-  if (!['studio', 'standalone'].includes(next.mode)) next.mode = DEFAULTS.mode;
+  if (!['studio', 'standalone', 'gateway'].includes(next.mode)) next.mode = DEFAULTS.mode;
   if (next.provider === 'elevenlabs') next.provider = 'elevenlabs_web';
   if (next.provider === 'openai') next.provider = 'fish';
   if (next.voiceByProvider?.elevenlabs && !next.voiceByProvider.elevenlabs_web) {

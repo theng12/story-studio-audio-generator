@@ -100,8 +100,16 @@
       <p class="hint">Off by default. When enabled, the extension polls a Relay Gateway for TTS jobs using a local worker token. Jobs are driven through the existing provider tab pipeline; ambiguous failures hold the job for manual review.</p>
       <label>
         <span>Gateway URL</span>
-        <input id="gatewayBaseUrl" placeholder="http://localhost:8799" />
+        <input id="gatewayBaseUrl" placeholder="" />
       </label>
+      <div class="connection-actions">
+        <button id="grantGateway" class="btn" type="button">Grant Gateway access</button>
+        <button id="testGateway" class="btn" type="button">Test Gateway connection</button>
+      </div>
+      <div class="connection-feedback">
+        <span id="gatewayGrantStatus" class="connection-note" aria-live="polite"></span>
+        <span id="gatewayTestStatus" class="connection-note" aria-live="polite"></span>
+      </div>
       <label>
         <span>Worker Token</span>
         <input id="gatewayWorkerToken" type="password" autocomplete="new-password" placeholder="Bearer token issued by the Gateway" />

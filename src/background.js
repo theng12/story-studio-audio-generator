@@ -16,7 +16,7 @@ import { sectionEligibility, storyStudioSection } from './lib/section-contracts.
 import { PROVIDERS, assertProviderSettingsSnapshot, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
 import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
 import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
-import { buildGatewayClient, GATEWAY_KIND } from './lib/gateway-client.js';
+import { buildGatewayClient, GATEWAY_KIND, validateHealthResponse, gatewayBindingFingerprint } from './lib/gateway-client.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -1179,13 +1179,14 @@ chrome.alarms?.onAlarm?.addListener((a) => {
 
 // ── Gateway third-mode worker ────────────────────────────────────────────────
 // Opt-in claim-based TTS worker. Polls the Gateway for audio jobs, drives the
-// existing provider tab pipeline (produceAudio), and uploads results. Runs on
-// the same MV3 alarm lifecycle as the local queue. Off by default; never
-// touches the local queue or Fleet Hub. No automatic paid retries: ambiguous
-// failures hold the job for manual review.
-let gatewayPollInFlight = false;
+// existing provider tab pipeline (produceAudio), and uploads results. Shares
+// the same durable serial scheduler (processing mutex + human pacing) as the
+// local queue so only ONE provider generation runs at a time regardless of
+// source. Off by default; never touches the local queue or Fleet Hub. No
+// automatic paid retries: after provider invocation, failures are ambiguous by
+// default unless explicitly proven unsent.
 const GATEWAY_INFLIGHT_KEY = 'gatewayInFlightJobId';
-const GATEWAY_STAGED_KEY = 'gatewayStagedResult';
+const GATEWAY_BINDING_KEY = 'gatewayInFlightBinding';
 
 async function ensureGatewayAlarm(settings = null) {
   const configured = settings || await getSettings();
@@ -1200,127 +1201,154 @@ async function ensureGatewayAlarm(settings = null) {
   }
 }
 
-// Persist the in-flight job ID so a worker restart does not re-claim the same
-// job. Cleared only after acknowledged result upload or explicit fail report.
-async function getGatewayInFlightJobId() {
-  const stored = await chrome.storage.local.get(GATEWAY_INFLIGHT_KEY);
-  return typeof stored[GATEWAY_INFLIGHT_KEY] === 'string' ? stored[GATEWAY_INFLIGHT_KEY] : '';
+async function getGatewayInFlight() {
+  const stored = await chrome.storage.local.get([GATEWAY_INFLIGHT_KEY, GATEWAY_BINDING_KEY]);
+  return {
+    jobId: typeof stored[GATEWAY_INFLIGHT_KEY] === 'string' ? stored[GATEWAY_INFLIGHT_KEY] : '',
+    binding: typeof stored[GATEWAY_BINDING_KEY] === 'string' ? stored[GATEWAY_BINDING_KEY] : '',
+  };
 }
-async function setGatewayInFlightJobId(jobId) {
-  await chrome.storage.local.set({ [GATEWAY_INFLIGHT_KEY]: String(jobId || '') });
+async function setGatewayInFlight(jobId, binding) {
+  await chrome.storage.local.set({ [GATEWAY_INFLIGHT_KEY]: String(jobId || ''), [GATEWAY_BINDING_KEY]: String(binding || '') });
 }
 async function clearGatewayInFlight() {
-  await chrome.storage.local.remove(GATEWAY_INFLIGHT_KEY);
+  await chrome.storage.local.remove([GATEWAY_INFLIGHT_KEY, GATEWAY_BINDING_KEY]);
 }
 
-// Stage generated audio bytes locally before result upload. Preserved until
-// acknowledged delivery or definite safe terminal. Never regenerated.
-async function stageGatewayResult(jobId, { base64, mime }) {
-  await chrome.storage.local.set({ [GATEWAY_STAGED_KEY]: { jobId: String(jobId || ''), base64, mime, stagedAt: Date.now() } });
-}
-async function getGatewayStagedResult() {
-  const stored = await chrome.storage.local.get(GATEWAY_STAGED_KEY);
-  return stored[GATEWAY_STAGED_KEY] || null;
-}
-async function clearGatewayStagedResult() {
-  await chrome.storage.local.remove(GATEWAY_STAGED_KEY);
+// Map a gateway TTS job to the produceAudio shape with explicit validated model
+// snapshot. Never silently substitutes account/local defaults. The job's
+// top-level model field is authoritative; providerSettings.model is ignored
+// to prevent silent substitution.
+function mapGatewayJobToProduceShape(job) {
+  const providerId = job.provider;
+  const p = PROVIDERS[providerId];
+  if (!p) throw new Error(`unsupported provider in gateway job: ${providerId}`);
+  // Build minimal providerSettings from job's explicit fields only.
+  const providerSettings = {};
+  if (job.model) {
+    // Model must be a known fallback or previously discovered model. We accept
+    // it as-is since validateTtsJob already checked against knownModels when
+    // provided. The caller (gatewayPoll) must supply modelMeta for snapshot.
+    providerSettings.model = job.model;
+    providerSettings.modelMeta = { id: job.model, label: `${job.model} (gateway)` };
+  }
+  if (typeof job.speed === 'number') providerSettings.speed = job.speed;
+  if (job.autoTag !== undefined) providerSettings.autoTag = !!job.autoTag;
+  return {
+    provider: providerId,
+    voice: job.voice,
+    text: job.text,
+    autoTag: !!job.autoTag,
+    providerSettings,
+  };
 }
 
 async function gatewayPoll() {
-  if (gatewayPollInFlight) return;
-  gatewayPollInFlight = true;
-  try {
-    const settings = await getSettings();
-    if (!settings.gatewayModeEnabled) return;
-    const baseUrl = String(settings.gatewayBaseUrl || '').trim();
-    if (!baseUrl) return;
-    const creds = await getGatewayCredentials();
-    if (!creds.token || !creds.workerId) {
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'worker token or id missing' } });
-      return;
-    }
-    const client = buildGatewayClient(baseUrl, creds.token);
+  // Share the processing mutex with the local queue. If processQueue is running,
+  // skip this tick — the alarm will retry. This prevents concurrent provider
+  // generations from both sources.
+  if (processing) return;
+  const settings = await getSettings();
+  if (!settings.gatewayModeEnabled) return;
+  const baseUrl = String(settings.gatewayBaseUrl || '').trim();
+  if (!baseUrl) return;
+  const creds = await getGatewayCredentials();
+  if (!creds.token || !creds.workerId) {
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'worker token or id missing' } });
+    return;
+  }
+  const currentBinding = gatewayBindingFingerprint(baseUrl, creds.workerId);
+  const client = buildGatewayClient(baseUrl, creds.token);
 
-    // If a previous run left an in-flight job, attempt to resume its staged
-    // result rather than claiming a new job. Changed worker/token binding must
-    // NOT redirect or re-execute an existing claimed item.
-    const inflightJobId = await getGatewayInFlightJobId();
-    if (inflightJobId) {
-      const staged = await getGatewayStagedResult();
-      if (staged && staged.jobId === inflightJobId) {
-        try {
-          await client.progress(inflightJobId, 'uploading', 'retrying staged result');
-          const blob = new Blob([Uint8Array.from(atob(staged.base64), (c) => c.charCodeAt(0))], { type: staged.mime });
-          const uploadResult = await client.result(inflightJobId, { mediaType: staged.mime, file: blob });
-          if (uploadResult.ignored) {
-            // Earlier terminal answer already won. Preserve staged bytes and
-            // loud held state; do not clean/mark delivered solely on 200.
-            await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'result ignored by gateway — staged bytes preserved', jobId: inflightJobId, held: true } });
-            return;
-          }
-          await clearGatewayStagedResult();
-          await clearGatewayInFlight();
-          await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: inflightJobId } });
-        } catch (error) {
-          const ambiguous = !!error?.ambiguous || isAmbiguousBridgeFailure(error);
-          await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId: inflightJobId, held: true } });
-        }
-        return;
-      }
-      // In-flight job but no staged bytes: generation was interrupted. Hold
-      // for manual review rather than silently dropping or regenerating.
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'in-flight job has no staged result — held for review', jobId: inflightJobId, held: true } });
+  // Check for in-flight job from a previous run.
+  const inflight = await getGatewayInFlight();
+  if (inflight.jobId) {
+    // Binding change mid-flight: refuse to redirect. Hold for manual review.
+    if (inflight.binding && inflight.binding !== currentBinding) {
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'gateway binding changed mid-flight — held for review', jobId: inflight.jobId, held: true } });
       return;
     }
-
-    let job;
-    try {
-      job = await client.claim(creds.workerId);
-    } catch (error) {
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240) } });
-      return;
-    }
-    if (!job) {
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true } });
-      return;
-    }
-    const jobId = job.jobId || job.id;
-
-    // Drive the job through the existing provider pipeline. Progress/fail/result
-    // are reported back to the Gateway; ambiguous failures hold the job (no
-    // automatic paid retry/regeneration/reassignment).
-    try {
-      await setGatewayInFlightJobId(jobId);
-      await client.progress(jobId, 'generating', 'starting provider');
-      const audio = await produceAudio(job, settings);
-      // Stage bytes before upload so a crash/restart preserves them.
-      await stageGatewayResult(jobId, { base64: audio.base64, mime: audio.mime });
-      await client.progress(jobId, 'uploading', 'sending result');
-      const blob = new Blob([Uint8Array.from(atob(audio.base64), (c) => c.charCodeAt(0))], { type: audio.mime });
-      const uploadResult = await client.result(jobId, { mediaType: audio.mime, file: blob });
-      if (uploadResult.ignored) {
-        // Earlier terminal answer already won. Preserve staged bytes and loud
-        // held state; do not clean/mark delivered solely on 200.
-        await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'result ignored by gateway — staged bytes preserved', jobId, held: true } });
-        return;
-      }
-      await clearGatewayStagedResult();
-      await clearGatewayInFlight();
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: jobId } });
-    } catch (error) {
-      const ambiguous = !!error?.ambiguous || isAmbiguousBridgeFailure(error);
+    // Try to resume staged result via audio-artifacts cache.
+    const descriptor = artifactDescriptor(`gateway:${inflight.jobId}`, 'audio/mpeg');
+    const staged = await getAudioArtifact(caches, descriptor);
+    if (staged) {
+      processing = true;
       try {
-        await client.fail(jobId, String(error.message || error), { ambiguous });
-      } catch {
-        /* best-effort fail report */
+        await client.progress(inflight.jobId, 'uploading', 'retrying staged result');
+        const blob = new Blob([Uint8Array.from(atob(staged.base64), (c) => c.charCodeAt(0))], { type: staged.mime });
+        const uploadResult = await client.result(inflight.jobId, { mediaType: staged.mime, file: blob });
+        if (!uploadResult.acknowledged) {
+          // Not acknowledged (ignored, malformed, refused). Preserve staged bytes.
+          await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: uploadResult.ignored ? 'result ignored — staged bytes preserved' : 'result not acknowledged — staged bytes preserved', jobId: inflight.jobId, held: true } });
+          return;
+        }
+        await deleteAudioArtifacts(caches, [descriptor]);
+        await clearGatewayInFlight();
+        await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: inflight.jobId } });
+      } catch (error) {
+        // After provider submission, always ambiguous unless proven unsent.
+        await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous: true, jobId: inflight.jobId, held: true } });
+      } finally {
+        processing = false;
       }
-      // After provider submission or result-upload error, hold the job. No
-      // provider re-execution via Resume/restart. Staged bytes (if any) are
-      // preserved for manual recovery.
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId, held: true } });
+      return;
     }
+    // In-flight but no staged bytes: interrupted generation. Hold.
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'in-flight job has no staged result — held for review', jobId: inflight.jobId, held: true } });
+    return;
+  }
+
+  // No in-flight job. Wait for human pacing gap (shared with local queue).
+  await waitForNextRun(null);
+  if (await isPaused()) return;
+
+  let job;
+  try {
+    job = await client.claim(creds.workerId);
+  } catch (error) {
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240) } });
+    return;
+  }
+  if (!job) {
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true } });
+    return;
+  }
+  const jobId = job.jobId;
+
+  // Acquire the shared processing mutex before any provider work.
+  processing = true;
+  try {
+    await setGatewayInFlight(jobId, currentBinding);
+    await client.progress(jobId, 'generating', 'starting provider');
+    const produceJob = mapGatewayJobToProduceShape(job);
+    const audio = await produceAudio(produceJob, settings);
+    // Stage bytes in audio-artifacts cache (durable, not chrome.storage base64).
+    const descriptor = artifactDescriptor(`gateway:${jobId}`, audio.mime);
+    await putAudioArtifact(caches, descriptor, audio);
+    await client.progress(jobId, 'uploading', 'sending result');
+    const blob = new Blob([Uint8Array.from(atob(audio.base64), (c) => c.charCodeAt(0))], { type: audio.mime });
+    const uploadResult = await client.result(jobId, { mediaType: audio.mime, file: blob });
+    if (!uploadResult.acknowledged) {
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: uploadResult.ignored ? 'result ignored — staged bytes preserved' : 'result not acknowledged — staged bytes preserved', jobId, held: true } });
+      return;
+    }
+    await deleteAudioArtifacts(caches, [descriptor]);
+    await clearGatewayInFlight();
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: jobId } });
+    // Arm human pacing for next item (shared with local queue).
+    await armHumanDelay(settings);
+  } catch (error) {
+    // After invoking provider, ALWAYS ambiguous unless explicit proven-unsent.
+    // Default fail ambiguity true.
+    const ambiguous = true;
+    try {
+      await client.fail(jobId, String(error.message || error), { ambiguous });
+    } catch {
+      /* best-effort fail report */
+    }
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId, held: true } });
   } finally {
-    gatewayPollInFlight = false;
+    processing = false;
   }
 }
 

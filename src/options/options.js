@@ -43,10 +43,14 @@ async function load() {
   $('testConnection').addEventListener('click', testConnection);
   $('grantFleet').addEventListener('click', grantFleet);
   $('testFleet').addEventListener('click', testFleet);
+  $('grantGateway').addEventListener('click', grantGateway);
+  $('testGateway').addEventListener('click', testGateway);
   $('studioBaseUrl').addEventListener('input', refreshGrantStatus);
   $('fleetHubUrl').addEventListener('input', refreshFleetGrantStatus);
+  $('gatewayBaseUrl').addEventListener('input', refreshGatewayGrantStatus);
   refreshGrantStatus();
   refreshFleetGrantStatus();
+  refreshGatewayGrantStatus();
 
   // Auto-save every field as you edit — no "did it save?" doubt. The explicit
   // Save button stays as a belt-and-suspenders.
@@ -322,3 +326,76 @@ function showFleetHealth({ ok, at, error = '' }) {
 }
 
 document.addEventListener('DOMContentLoaded', load);
+
+// ── Gateway grant + test (mirrors Fleet pattern) ────────────────────────────
+
+async function refreshGatewayGrantStatus() {
+  const el = $('gatewayGrantStatus');
+  const btn = $('grantGateway');
+  const url = $('gatewayBaseUrl').value.trim();
+  const pat = originPattern(url);
+  if (!pat) { el.textContent = ''; btn.disabled = false; return; }
+  if (isLocalUrl(url)) {
+    el.textContent = 'Local — no grant needed.';
+    el.style.color = COLOR.muted;
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = false;
+  const granted = await chrome.permissions.contains({ origins: [pat] }).catch(() => false);
+  el.textContent = granted ? '✓ Access granted' : 'Not granted — click to grant.';
+  el.style.color = granted ? COLOR.ok : COLOR.warn;
+}
+
+async function grantGateway() {
+  const url = $('gatewayBaseUrl').value.trim();
+  const pat = originPattern(url);
+  const el = $('gatewayGrantStatus');
+  if (!pat) { el.textContent = 'Enter a valid Gateway URL first.'; el.style.color = COLOR.err; return; }
+  if (isLocalUrl(url)) return refreshGatewayGrantStatus();
+  try {
+    const granted = await chrome.permissions.request({ origins: [pat] });
+    if (!granted) { el.textContent = 'Permission declined.'; el.style.color = COLOR.err; return; }
+    el.textContent = '✓ Granted.';
+    el.style.color = COLOR.ok;
+  } catch (error) {
+    el.textContent = `Grant failed: ${error.message || error}`;
+    el.style.color = COLOR.err;
+  }
+}
+
+async function testGateway() {
+  const status = $('gatewayTestStatus');
+  const url = $('gatewayBaseUrl').value.trim();
+  status.textContent = 'Testing…';
+  status.style.color = COLOR.muted;
+  if (!url) { status.textContent = 'Enter a Gateway URL first.'; status.style.color = COLOR.err; return; }
+  if (!isLocalUrl(url)) {
+    const pat = originPattern(url);
+    if (!pat || !(await chrome.permissions.contains({ origins: [pat] }).catch(() => false))) {
+      status.textContent = 'Grant Gateway access first.';
+      status.style.color = COLOR.warn;
+      return;
+    }
+  }
+  if (!$('gatewayWorkerToken').value || !$('gatewayWorkerId').value.trim()) {
+    status.textContent = 'Enter worker token and ID first.';
+    status.style.color = COLOR.warn;
+    return;
+  }
+  try {
+    await save({ refreshFleet: false });
+    const result = await chrome.runtime.sendMessage({ type: 'testGatewayConnection' });
+    if (!result?.ok) throw new Error(result?.error || 'No response from Gateway.');
+    showGatewayHealth({ ok: true, at: Date.now() });
+  } catch (error) {
+    showGatewayHealth({ ok: false, at: Date.now(), error: error.message || error });
+  }
+}
+
+function showGatewayHealth({ ok, at, error = '' }) {
+  const status = $('gatewayTestStatus');
+  const when = Number.isFinite(Number(at)) ? new Date(Number(at)).toLocaleString() : 'just now';
+  status.textContent = ok ? `✓ Gateway connected (${when}).` : `✗ Gateway unavailable (${when}): ${error}`;
+  status.style.color = ok ? COLOR.ok : COLOR.err;
+}
