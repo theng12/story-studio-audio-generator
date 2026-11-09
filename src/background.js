@@ -1184,6 +1184,8 @@ chrome.alarms?.onAlarm?.addListener((a) => {
 // touches the local queue or Fleet Hub. No automatic paid retries: ambiguous
 // failures hold the job for manual review.
 let gatewayPollInFlight = false;
+const GATEWAY_INFLIGHT_KEY = 'gatewayInFlightJobId';
+const GATEWAY_STAGED_KEY = 'gatewayStagedResult';
 
 async function ensureGatewayAlarm(settings = null) {
   const configured = settings || await getSettings();
@@ -1196,6 +1198,32 @@ async function ensureGatewayAlarm(settings = null) {
   } catch {
     /* alarms unavailable */
   }
+}
+
+// Persist the in-flight job ID so a worker restart does not re-claim the same
+// job. Cleared only after acknowledged result upload or explicit fail report.
+async function getGatewayInFlightJobId() {
+  const stored = await chrome.storage.local.get(GATEWAY_INFLIGHT_KEY);
+  return typeof stored[GATEWAY_INFLIGHT_KEY] === 'string' ? stored[GATEWAY_INFLIGHT_KEY] : '';
+}
+async function setGatewayInFlightJobId(jobId) {
+  await chrome.storage.local.set({ [GATEWAY_INFLIGHT_KEY]: String(jobId || '') });
+}
+async function clearGatewayInFlight() {
+  await chrome.storage.local.remove(GATEWAY_INFLIGHT_KEY);
+}
+
+// Stage generated audio bytes locally before result upload. Preserved until
+// acknowledged delivery or definite safe terminal. Never regenerated.
+async function stageGatewayResult(jobId, { base64, mime }) {
+  await chrome.storage.local.set({ [GATEWAY_STAGED_KEY]: { jobId: String(jobId || ''), base64, mime, stagedAt: Date.now() } });
+}
+async function getGatewayStagedResult() {
+  const stored = await chrome.storage.local.get(GATEWAY_STAGED_KEY);
+  return stored[GATEWAY_STAGED_KEY] || null;
+}
+async function clearGatewayStagedResult() {
+  await chrome.storage.local.remove(GATEWAY_STAGED_KEY);
 }
 
 async function gatewayPoll() {
@@ -1212,6 +1240,39 @@ async function gatewayPoll() {
       return;
     }
     const client = buildGatewayClient(baseUrl, creds.token);
+
+    // If a previous run left an in-flight job, attempt to resume its staged
+    // result rather than claiming a new job. Changed worker/token binding must
+    // NOT redirect or re-execute an existing claimed item.
+    const inflightJobId = await getGatewayInFlightJobId();
+    if (inflightJobId) {
+      const staged = await getGatewayStagedResult();
+      if (staged && staged.jobId === inflightJobId) {
+        try {
+          await client.progress(inflightJobId, 'uploading', 'retrying staged result');
+          const blob = new Blob([Uint8Array.from(atob(staged.base64), (c) => c.charCodeAt(0))], { type: staged.mime });
+          const uploadResult = await client.result(inflightJobId, { mediaType: staged.mime, file: blob });
+          if (uploadResult.ignored) {
+            // Earlier terminal answer already won. Preserve staged bytes and
+            // loud held state; do not clean/mark delivered solely on 200.
+            await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'result ignored by gateway — staged bytes preserved', jobId: inflightJobId, held: true } });
+            return;
+          }
+          await clearGatewayStagedResult();
+          await clearGatewayInFlight();
+          await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: inflightJobId } });
+        } catch (error) {
+          const ambiguous = !!error?.ambiguous || isAmbiguousBridgeFailure(error);
+          await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId: inflightJobId, held: true } });
+        }
+        return;
+      }
+      // In-flight job but no staged bytes: generation was interrupted. Hold
+      // for manual review rather than silently dropping or regenerating.
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'in-flight job has no staged result — held for review', jobId: inflightJobId, held: true } });
+      return;
+    }
+
     let job;
     try {
       job = await client.claim(creds.workerId);
@@ -1223,27 +1284,61 @@ async function gatewayPoll() {
       await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true } });
       return;
     }
+    const jobId = job.jobId || job.id;
+
     // Drive the job through the existing provider pipeline. Progress/fail/result
     // are reported back to the Gateway; ambiguous failures hold the job (no
     // automatic paid retry/regeneration/reassignment).
     try {
-      await client.progress(job.jobId || job.id, 'generating', 'starting provider');
+      await setGatewayInFlightJobId(jobId);
+      await client.progress(jobId, 'generating', 'starting provider');
       const audio = await produceAudio(job, settings);
-      await client.progress(job.jobId || job.id, 'uploading', 'sending result');
+      // Stage bytes before upload so a crash/restart preserves them.
+      await stageGatewayResult(jobId, { base64: audio.base64, mime: audio.mime });
+      await client.progress(jobId, 'uploading', 'sending result');
       const blob = new Blob([Uint8Array.from(atob(audio.base64), (c) => c.charCodeAt(0))], { type: audio.mime });
-      await client.result(job.jobId || job.id, { mediaType: audio.mime, file: blob });
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: job.jobId || job.id } });
+      const uploadResult = await client.result(jobId, { mediaType: audio.mime, file: blob });
+      if (uploadResult.ignored) {
+        // Earlier terminal answer already won. Preserve staged bytes and loud
+        // held state; do not clean/mark delivered solely on 200.
+        await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'result ignored by gateway — staged bytes preserved', jobId, held: true } });
+        return;
+      }
+      await clearGatewayStagedResult();
+      await clearGatewayInFlight();
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: jobId } });
     } catch (error) {
       const ambiguous = !!error?.ambiguous || isAmbiguousBridgeFailure(error);
       try {
-        await client.fail(job.jobId || job.id, String(error.message || error), { ambiguous });
+        await client.fail(jobId, String(error.message || error), { ambiguous });
       } catch {
         /* best-effort fail report */
       }
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId: job.jobId || job.id } });
+      // After provider submission or result-upload error, hold the job. No
+      // provider re-execution via Resume/restart. Staged bytes (if any) are
+      // preserved for manual recovery.
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId, held: true } });
     }
   } finally {
     gatewayPollInFlight = false;
+  }
+}
+
+async function gatewayHealthTest() {
+  const settings = await getSettings();
+  const baseUrl = String(settings.gatewayBaseUrl || '').trim();
+  if (!baseUrl) return { ok: false, error: 'gateway URL not configured' };
+  const creds = await getGatewayCredentials();
+  if (!creds.token || !creds.workerId) return { ok: false, error: 'worker token or id missing' };
+  const client = buildGatewayClient(baseUrl, creds.token);
+  try {
+    const health = await client.health();
+    if (!health.ok) return { ok: false, error: 'health reported not ok' };
+    const validation = validateHealthResponse(health.raw, { workerId: creds.workerId, kind: GATEWAY_KIND });
+    if (!validation.ok) return { ok: false, error: validation.error };
+    return { ok: true, at: Date.now() };
+  } catch (error) {
+    return { ok: false, error: String(error.message || error) };
   }
 }
 
@@ -1300,6 +1395,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       reply(getSettings().then(async (settings) => {
         await ensureFleetAlarm(settings);
         return settings.fleetAgentEnabled ? fleetHeartbeat() : { ok: true, disabled: true };
+      }));
+      return true;
+    case 'testGatewayConnection':
+      reply(gatewayHealthTest());
+      return true;
+    case 'refreshGatewayAgent':
+      reply(getSettings().then(async (settings) => {
+        await ensureGatewayAlarm(settings);
+        if (settings.gatewayModeEnabled) gatewayPoll();
+        return { ok: true };
       }));
       return true;
     case 'getQueue':

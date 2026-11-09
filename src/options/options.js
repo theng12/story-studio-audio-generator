@@ -92,6 +92,7 @@ async function save({ refreshFleet = true } = {}) {
     // Keep the background alarm in sync with the opt-in toggle. This only
     // reports telemetry; it never opens a provider tab or starts queue work.
     if (refreshFleet) chrome.runtime.sendMessage({ type: 'refreshFleetAgent' }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'refreshGatewayAgent' }).catch(() => {});
     showSaved();
   } catch (e) {
     // Never fail silently — a storage error must be visible, not look like
