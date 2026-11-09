@@ -1,282 +1,186 @@
-// Real background.js integration tests — dynamically imports the actual service
-// worker with mocked Chrome/storage/alarms/caches/fetch globals. Exercises
-// gatewayPoll through the real message handler (refreshGatewayAgent) and
-// verifies claim → provider invocation → staged result → malformed/ignored ack
-// retains bytes → restart → explicit retry → exact bytes delivered.
-//
-// No live server, no provider tab, no network. All fetch/provider calls intercepted.
-
+// Actual service-worker integration. Only browser/provider/HTTP boundaries are
+// mocked; the imported background owns claims, locks, pacing and recovery.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
-// ── Mock infrastructure ─────────────────────────────────────────────────────
-
-function createMockChrome(initialStorage = {}) {
-  const store = { ...initialStorage };
-  const alarmCallbacks = [];
+import { setTimeout as pause } from 'node:timers/promises';
+const AUDIO = Buffer.from('RIFF exact fixture audio bytes');
+const JOB = { jobId: 'audio/a', kind: 'audio', provider: 'fish', voice: 'v1', text: 'Hello.', model: 's2.1-pro', speed: 1.2 };
+const clone = (value) => value === undefined ? value : structuredClone(value);
+function area(state) {
   return {
-    storage: {
-      local: {
-        get: async (keys) => {
-          if (typeof keys === 'string') return { [keys]: store[keys] };
-          if (Array.isArray(keys)) {
-            const r = {};
-            for (const k of keys) if (k in store) r[k] = store[k];
-            return r;
-          }
-          return { ...store };
-        },
-        set: async (values) => { Object.assign(store, values); },
-        remove: async (keys) => {
-          for (const k of (Array.isArray(keys) ? keys : [keys])) delete store[k];
-        },
-      },
-      sync: { get: async () => ({}), set: async () => {} },
-      session: { get: async () => ({}) },
-    },
-    alarms: {
-      create: (name, opts) => { alarmCallbacks.push({ name, opts }); },
-      clear: () => {},
-    },
-    sidePanel: { setPanelBehavior: () => Promise.resolve() },
-    runtime: {
-      onInstalled: { addListener: () => {} },
-      onMessage: { addListener: () => {} },
-    },
+    async get(keys) { return keys == null ? clone(state) : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((key) => key in state).map((key) => [key, clone(state[key])])); },
+    async set(values) { Object.assign(state, clone(values)); },
+    async remove(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) delete state[key]; },
+  };
+}
+function cacheStorage() {
+  const rows = new Map();
+  return { rows, async open() { return {
+    async put(key, response) { rows.set(key, response.clone()); },
+    async match(key) { return rows.get(key)?.clone(); },
+    async delete(key) { return rows.delete(typeof key === 'string' ? key : key.url); },
+    async keys() { return [...rows.keys()].map((url) => ({ url })); },
+  }; } };
+}
+async function waitFor(predicate) { for (let n = 0; n < 400; n++) { if (predicate()) return; await pause(5); } throw new Error('Actual audio background fixture timed out.'); }
+async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled = true, autoStart = false, job = JOB, answers = [{ ok: true }], onGenerate, providerFailure, lostClaim = false, uploadLimit = 1024, voices = [{ id: 'v1', name: 'Fixture voice' }] } = {}) {
+  local ||= { gatewaySettings: { gatewayModeEnabled: enabled, gatewayBaseUrl: 'http://gateway.invalid' }, gatewayWorkerToken: 'fixture-only', gatewayWorkerId: 'fixture-audio' };
+  const sync = { settings: { mode, humanDelayMinSec: 0, humanDelayMaxSec: 0, providerSettings: { fish: { model: 'wrong-local-model', speed: 1.9 } } } };
+  const savedEnabled = local.gatewaySettings.gatewayModeEnabled;
+  if (!autoStart) local.gatewaySettings.gatewayModeEnabled = false;
+  const previous = Object.fromEntries(['chrome', 'fetch', 'caches'].map((key) => [key, globalThis[key]]));
+  const calls = [], provider = [], alarms = [];
+  let listener;
+  globalThis.chrome = {
+    storage: { local: area(local), sync: area(sync), session: area({}) },
+    alarms: { create() {}, clear() {}, onAlarm: { addListener(fn) { alarms.push(fn); } } },
+    runtime: { onInstalled: { addListener() {} }, onMessage: { addListener(fn) { listener = fn; } } },
+    sidePanel: { setPanelBehavior: async () => {} },
     tabs: {
-      query: async () => [],
-      reload: () => {},
-      update: () => Promise.resolve(),
-      create: () => Promise.resolve({}),
-      onUpdated: { addListener: () => {}, removeListener: () => {} },
+      query: async () => [{ id: 7, status: 'complete' }],
+      async sendMessage(id, message) {
+        provider.push(clone(message));
+        if (message.type === 'fish:inventory') return { ok: true, raw: { fishModelOptions: { labels: ['Fish Audio S2.1 Pro'], complete: true }, voices } };
+        if (message.type === 'fish:generate') {
+          await onGenerate?.(local);
+          if (providerFailure) throw new Error('Fixture provider outcome unknown.');
+          return { ok: true, base64: AUDIO.toString('base64'), mime: 'audio/wav' };
+        }
+        throw new Error(`Unexpected provider operation ${message.type}`);
+      },
     },
-    windows: { update: () => Promise.resolve() },
-    downloads: {
-      download: async () => 'dl1',
-      search: async () => [],
-      onChanged: { addListener: () => {}, removeListener: () => {} },
-    },
-    _store: store,
-    _alarmCallbacks: alarmCallbacks,
   };
-}
-
-function createMockCaches() {
-  const buckets = new Map();
+  globalThis.caches = cache;
+  globalThis.fetch = async (url, init = {}) => {
+    assert.equal(new URL(url).origin, 'http://gateway.invalid', 'No network or Story endpoint allowed.');
+    const call = { url, init }; calls.push(call);
+    if (url.endsWith('/health')) return Response.json({ ok: true, workerId: 'fixture-audio', kind: 'audio', maxResultBytes: uploadLimit });
+    if (url.endsWith('/claim')) { if (lostClaim) throw new Error('Fixture claim outcome unknown.'); return job ? Response.json({ job }) : new Response(null, { status: 204 }); }
+    if (url.endsWith('/result')) { call.bytes = Buffer.from(await init.body.get('file').arrayBuffer()); call.mime = init.body.get('mediaType'); return Response.json(answers.length > 1 ? answers.shift() : answers[0]); }
+    if (/\/(progress|fail)$/.test(url)) return Response.json({ ok: true });
+    throw new Error(`Unexpected HTTP ${url}`);
+  };
+  await import(`../src/background.js?gateway-runtime=${Date.now()}-${Math.random()}`);
+  await pause(25);
+  local.gatewaySettings.gatewayModeEnabled = savedEnabled;
   return {
-    open: async (name) => {
-      if (!buckets.has(name)) buckets.set(name, new Map());
-      const bucket = buckets.get(name);
-      return {
-        put: async (key, response) => { bucket.set(key, response); },
-        match: async (key) => bucket.get(key) || null,
-        delete: async (key) => bucket.delete(key),
-        keys: async () => Array.from(bucket.keys()).map((url) => ({ url })),
-      };
-    },
-    _buckets: buckets,
+    local, sync, cache, calls, provider,
+    tick() { for (const alarm of alarms) alarm({ name: 'gatewayPoll' }); },
+    async send(message) { return new Promise((resolve) => listener(message, {}, resolve)); },
+    async settled() { await pause(25); },
+    restore() { for (const [key, value] of Object.entries(previous)) globalThis[key] = value; },
   };
 }
 
-// ── Import actual background.js with mocked globals ─────────────────────────
-
-async function loadBackground(initialStorage = {}) {
-  const chrome = createMockChrome(initialStorage);
-  const caches = createMockCaches();
-  const fetchLog = [];
-  let fetchHandler = async (url, opts) => {
-    fetchLog.push({ url: String(url), method: opts?.method || 'GET', body: opts?.body });
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
-
-  globalThis.chrome = chrome;
-  globalThis.caches = caches;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (...args) => fetchHandler(...args);
-
-  // Dynamic import executes top-level side effects against our mocks.
-  const bg = await import('../src/background.js');
-
-  return {
-    chrome,
-    caches,
-    fetchLog,
-    setFetchHandler: (fn) => { fetchHandler = fn; },
-    restoreFetch: () => { globalThis.fetch = originalFetch; },
-    module: bg,
-  };
-}
-
-// ── Tests ───────────────────────────────────────────────────────────────────
-
-test('background.js imports successfully with mocked Chrome globals', async () => {
-  const ctx = await loadBackground();
+test('real claim/inventory/generation/upload returns exact bytes with authoritative model and voice', async () => {
+  const worker = await boot();
   try {
-    assert.ok(ctx.module, 'module loaded');
-    // Top-level side effects ran without throwing
-    assert.ok(true, 'top-level side effects executed against mocks');
-  } finally {
-    ctx.restoreFetch();
+    worker.tick(); worker.tick();
+    await waitFor(() => worker.local.gatewayStatus?.lastJob === JOB.jobId);
+    await worker.settled();
+    const generation = worker.provider.filter((entry) => entry.type === 'fish:generate');
+    assert.equal(generation.length, 1);
+    assert.equal(generation[0].backend, JOB.model);
+    assert.equal(generation[0].voice, JOB.voice);
+    assert.equal(generation[0].speed, JOB.speed);
+    assert.deepEqual(worker.calls.find((entry) => entry.url.endsWith('/result')).bytes, AUDIO);
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+    assert.equal(worker.cache.rows.size, 0);
+    assert.equal(worker.local.gatewayInFlightJobId, undefined);
+    assert.equal(worker.sync.settings.gatewayBaseUrl, undefined);
+  } finally { worker.restore(); }
+});
+
+test('malformed/ignored response holds bytes across actual restart/sweep; explicit delivery does not generate', async () => {
+  const first = await boot({ answers: [{ ok: true, ignored: true }] });
+  let local, cache;
+  try {
+    first.tick();
+    await waitFor(() => first.local.gatewayStatus?.held);
+    await first.settled();
+    assert.equal(first.cache.rows.size, 1);
+    first.tick(); await first.settled();
+    assert.equal(first.calls.filter((entry) => entry.url.endsWith('/result')).length, 1, 'Alarm must not retry upload.');
+    assert.equal(first.calls.filter((entry) => entry.url.endsWith('/fail')).length, 0);
+    local = first.local; cache = first.cache;
+  } finally { first.restore(); }
+  const second = await boot({ local, cache, autoStart: true, answers: [{}, { ok: true }] });
+  try {
+    assert.equal(cache.rows.size, 1, 'Startup sweep must preserve the Gateway artifact.');
+    assert.equal(second.calls.length, 0);
+    assert.equal((await second.send({ type: 'retryGatewayDelivery' })).ok, false);
+    assert.equal(cache.rows.size, 1);
+    assert.equal((await second.send({ type: 'retryGatewayDelivery' })).ok, true);
+    assert.equal(second.provider.length, 0);
+    assert.deepEqual(second.calls.find((entry) => entry.url.endsWith('/result')).bytes, AUDIO);
+    assert.equal(cache.rows.size, 0);
+  } finally { second.restore(); }
+});
+
+test('changed token during provider call retains bytes and refuses redirect', async () => {
+  const worker = await boot({ onGenerate: (local) => { local.gatewayWorkerToken = 'rotated'; } });
+  try {
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.held); await worker.settled();
+    assert.equal(worker.cache.rows.size, 1);
+    assert.equal(worker.calls.filter((entry) => /\/(fail|result)$/.test(entry.url)).length, 0);
+    assert.equal((await worker.send({ type: 'retryGatewayDelivery' })).ok, false);
+  } finally { worker.restore(); }
+});
+
+test('unknown generation and lost claim remain held without replay after restart/alarm', async () => {
+  const failed = await boot({ providerFailure: true });
+  let local, cache;
+  try {
+    failed.tick(); await waitFor(() => failed.local.gatewayStatus?.held); await failed.settled();
+    assert.equal(JSON.parse(failed.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, true);
+    await failed.send({ type: 'resumeQueue' }); failed.tick(); await failed.settled();
+    assert.equal(failed.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+    local = failed.local; cache = failed.cache;
+  } finally { failed.restore(); }
+  const restarted = await boot({ local, cache, autoStart: true });
+  try { assert.equal(restarted.provider.length, 0); assert.equal(restarted.calls.length, 0); }
+  finally { restarted.restore(); }
+  const lost = await boot({ lostClaim: true });
+  try {
+    lost.tick(); await waitFor(() => lost.local.gatewayStatus?.held); lost.tick(); await lost.settled();
+    assert.equal(lost.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+    assert.equal(lost.provider.length, 0);
+  } finally { lost.restore(); }
+});
+
+test('wrong mode/disabled never claims; missing model/voice and unknown live voice refuse Generate', async () => {
+  for (const mode of ['studio', 'standalone']) {
+    const worker = await boot({ mode, autoStart: true });
+    try { worker.tick(); await worker.settled(); assert.equal(worker.calls.length, 0); }
+    finally { worker.restore(); }
+  }
+  const disabled = await boot({ enabled: false, autoStart: true });
+  try { disabled.tick(); await disabled.settled(); assert.equal(disabled.calls.length, 0); }
+  finally { disabled.restore(); }
+  for (const job of [{ ...JOB, model: undefined }, { ...JOB, voice: 'not-discovered' }]) {
+    const worker = await boot({ job });
+    try {
+      worker.tick(); await waitFor(() => worker.local.gatewayStatus?.error); await worker.settled();
+      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+      assert.equal(JSON.parse(worker.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, false);
+    } finally { worker.restore(); }
   }
 });
 
-test('gatewayPoll skips when gatewayModeEnabled is false', async () => {
-  const ctx = await loadBackground({
-    settings: { gatewayModeEnabled: false, gatewayBaseUrl: 'http://gw:8080' },
-  });
-  let fetchCalled = false;
-  ctx.setFetchHandler(async () => { fetchCalled = true; return { ok: true, status: 200, json: async () => ({}) }; });
+test('upload limit retains output; lock prevents local enqueue from generating concurrently', async () => {
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  const worker = await boot({ uploadLimit: 1, onGenerate: () => barrier });
   try {
-    // Trigger gatewayPoll via the refreshGatewayAgent message path
-    // The module's onMessage listener was registered at import time against
-    // our mock. We call gatewayPoll indirectly by invoking the stored listener.
-    // Since we can't easily extract the listener, we verify via storage state:
-    // after a tick, no gatewayStatus should be written when mode is off.
-    await new Promise((r) => setTimeout(r, 50));
-    const status = ctx.chrome._store.gatewayStatus;
-    // When mode is off, gatewayPoll returns before writing status
-    assert.equal(fetchCalled, false, 'no fetch when gateway mode is off');
-  } finally {
-    ctx.restoreFetch();
-  }
-});
-
-test('SHA-256 binding fingerprint includes token — token change produces different hash', async () => {
-  // Import the actual function from gateway-client.js (already updated)
-  const { gatewayBindingFingerprint } = await import('../src/lib/gateway-client.js');
-  const fp1 = await gatewayBindingFingerprint('http://gw:8080', 'w1', 'token-a');
-  const fp2 = await gatewayBindingFingerprint('http://gw:8080', 'w1', 'token-b');
-  const fp3 = await gatewayBindingFingerprint('http://gw:8080', 'w1', 'token-a');
-  assert.notEqual(fp1, fp2, 'token change must produce different fingerprint');
-  assert.equal(fp1, fp3, 'same inputs must produce same fingerprint');
-  assert.match(fp1, /^[0-9a-f]{64}$/, 'must be hex SHA-256');
-  assert.ok(!fp1.includes('token-a'), 'hash must not contain raw token');
-});
-
-test('binding hold: token change mid-flight refuses redirect', async () => {
-  const { gatewayBindingFingerprint } = await import('../src/lib/gateway-client.js');
-  // Simulate: job started with token-a, then config changed to token-b
-  const inflightBinding = await gatewayBindingFingerprint('http://gw:8080', 'w1', 'token-a');
-  const currentBinding = await gatewayBindingFingerprint('http://gw:8080', 'w1', 'token-b');
-  assert.notEqual(inflightBinding, currentBinding, 'token rotation must change binding');
-  // The gatewayPoll code at line 1267 checks: inflight.binding !== currentBinding → hold
-  // This test verifies the contract that makes that check fire.
-});
-
-test('malformed result ack retains staged bytes (not acknowledged)', async () => {
-  const { buildGatewayClient } = await import('../src/lib/gateway-client.js');
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    const path = new URL(url).pathname;
-    if (path.endsWith('/result')) {
-      return { ok: true, status: 200, json: async () => ({}) }; // malformed: no ok field
-    }
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
-  try {
-    const client = buildGatewayClient('http://gw', 'tok');
-    const blob = new Blob(['exact-audio-bytes'], { type: 'audio/mpeg' });
-    const result = await client.result('j1', { mediaType: 'audio/mpeg', file: blob });
-    assert.equal(result.acknowledged, false, 'malformed 200 must NOT be acknowledged');
-    assert.equal(result.ok, false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('ignored result ack retains staged bytes (not acknowledged)', async () => {
-  const { buildGatewayClient } = await import('../src/lib/gateway-client.js');
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    const path = new URL(url).pathname;
-    if (path.endsWith('/result')) {
-      return { ok: true, status: 200, json: async () => ({ ok: true, ignored: true }) };
-    }
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
-  try {
-    const client = buildGatewayClient('http://gw', 'tok');
-    const blob = new Blob(['exact-audio-bytes'], { type: 'audio/mpeg' });
-    const result = await client.result('j1', { mediaType: 'audio/mpeg', file: blob });
-    assert.equal(result.acknowledged, false, 'ignored result must NOT be acknowledged');
-    assert.equal(result.ignored, true);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('explicit ok:true without ignored acknowledges delivery', async () => {
-  const { buildGatewayClient } = await import('../src/lib/gateway-client.js');
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    const path = new URL(url).pathname;
-    if (path.endsWith('/result')) {
-      return { ok: true, status: 200, json: async () => ({ ok: true }) };
-    }
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
-  try {
-    const client = buildGatewayClient('http://gw', 'tok');
-    const blob = new Blob(['exact-audio-bytes'], { type: 'audio/mpeg' });
-    const result = await client.result('j1', { mediaType: 'audio/mpeg', file: blob });
-    assert.equal(result.acknowledged, true, 'explicit ok:true must be acknowledged');
-    assert.equal(result.ok, true);
-    assert.equal(result.ignored, false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('claim unwraps envelope and validates TTS job schema', async () => {
-  const { buildGatewayClient } = await import('../src/lib/gateway-client.js');
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    const path = new URL(url).pathname;
-    if (path === '/api/workers/claim') {
-      return {
-        ok: true, status: 200,
-        json: async () => ({ job: { jobId: 'j1', provider: 'fish', voice: 'v1', text: 'hello', model: 's2.1-pro' } }),
-      };
-    }
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
-  try {
-    const client = buildGatewayClient('http://gw', 'tok');
-    const job = await client.claim('w1');
-    assert.equal(job.jobId, 'j1');
-    assert.equal(job.provider, 'fish');
-    assert.equal(job.model, 's2.1-pro');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('fail report defaults ambiguous=true after provider invocation', async () => {
-  const { buildGatewayClient } = await import('../src/lib/gateway-client.js');
-  let capturedBody = null;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    capturedBody = JSON.parse(opts.body);
-    return { ok: true, status: 200, json: async () => ({}) };
-  };
-  try {
-    const client = buildGatewayClient('http://gw', 'tok');
-    await client.fail('j1', 'provider error');
-    assert.equal(capturedBody.ambiguous, true, 'default ambiguity must be true');
-    assert.equal(capturedBody.jobId, undefined, 'jobId must NOT be in fail body');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('processing mutex prevents concurrent gateway and local generation', async () => {
-  // Verify the contract: background.js exports no public processing flag,
-  // but the mutex is enforced by the `if (processing) return` guard at line 1250.
-  // We verify this by checking that the source contains the guard.
-  const { readFileSync } = await import('node:fs');
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
-  assert.ok(source.includes('if (processing) return'), 'gatewayPoll must check processing mutex');
-  // Count occurrences: both processQueue and gatewayPoll must check it
-  const matches = source.match(/if \(processing\) return/g);
-  assert.ok(matches && matches.length >= 2, 'both processQueue and gatewayPoll must check mutex');
+    worker.tick(); await waitFor(() => worker.provider.some((entry) => entry.type === 'fish:generate'));
+    const enqueued = await worker.send({ type: 'enqueue', items: [{ id: 'local', kind: 'paste', target: 'download', text: 'local', label: 'local' }] });
+    assert.equal(enqueued.added, 1);
+    worker.tick(); await worker.settled();
+    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+    release();
+    await waitFor(() => worker.local.gatewayStatus?.held); await worker.settled();
+    assert.equal(worker.cache.rows.size, 1);
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/result')).length, 0);
+    assert.equal(worker.local.queue[0].status, 'pending');
+  } finally { release(); worker.restore(); }
 });

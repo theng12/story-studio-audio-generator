@@ -1,192 +1,86 @@
-// Gateway third-mode client — claim-based TTS worker protocol.
-//
-// Wire contract (static-only; no live server exercised here):
-//   GET  /api/workers/health                                    -> 200 { ok: true, workerId, kind }
-//   POST /api/workers/claim                                     <- { workerId, kind: 'audio' }
-//        -> 204 (no job) | 200 { job: {...} }                   Bearer <token>
-//   POST /api/workers/jobs/${jobId}/progress                    <- { phase, message }
-//   POST /api/workers/jobs/${jobId}/fail                        <- { error, ambiguous }
-//   POST /api/workers/jobs/${jobId}/result                      <- multipart { mediaType, file }
-//        -> 200 { ok: true }              acknowledged
-//        -> 200 { ok: true, ignored: true } earlier terminal won; NOT acknowledged
-//        -> 200 {} or malformed           NOT acknowledged; preserve staged bytes
-//
-// This module is pure fetch + validation. It never touches chrome.storage,
-// provider tabs, or the local queue — those stay in background.js.
-
+// Scoped worker wire v1. No automatic retries or credential-bearing redirects.
 export const GATEWAY_KIND = 'audio';
-
-// Minimal strict TTS job payload proposal. The Gateway currently ships only
-// a video payload adapter; audio/TTS requires these baseline fields. Any
-// missing or unsupported field must fail before a provider call.
 export const TTS_JOB_SCHEMA = Object.freeze({
-  required: ['jobId', 'provider', 'voice', 'text'],
-  optional: ['model', 'speed', 'autoTag', 'providerSettings'],
+  required: ['jobId', 'provider', 'voice', 'text', 'model'],
+  optional: ['speed', 'autoTag', 'providerSettings'],
   knownProviders: ['fish', 'elevenlabs_web'],
   acceptedMediaTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav'],
 });
-
-// Strict pre-provider validation. Rejects missing/unsupported provider, voice,
-// model, format or malformed job BEFORE any provider call. Never silently
-// substitutes account defaults.
 export function validateTtsJob(job, { knownVoices = [], knownModels = [] } = {}) {
-  if (!job || typeof job !== 'object') return { ok: false, error: 'job is not an object' };
-  for (const field of TTS_JOB_SCHEMA.required) {
-    if (typeof job[field] !== 'string' || !job[field].trim()) {
-      return { ok: false, error: `missing or empty required field: ${field}` };
-    }
+  if (!job || typeof job !== 'object' || Array.isArray(job)) return { ok: false, error: 'Audio job is not an object.' };
+  if (job.kind !== GATEWAY_KIND) return { ok: false, error: 'Job must state kind audio.' };
+  for (const key of TTS_JOB_SCHEMA.required) {
+    if (typeof job[key] !== 'string' || !job[key].trim()) return { ok: false, error: `Audio job needs ${key}.` };
   }
-  if (!TTS_JOB_SCHEMA.knownProviders.includes(job.provider)) {
-    return { ok: false, error: `unsupported provider: ${job.provider}` };
-  }
-  const voice = String(job.voice || '').trim();
-  if (!voice) return { ok: false, error: 'missing or empty required field: voice' };
-  if (knownVoices.length && !knownVoices.includes(voice)) {
-    return { ok: false, error: `unsupported voice for ${job.provider}: ${voice}` };
-  }
-  if (job.model !== undefined && job.model !== null) {
-    const model = String(job.model || '').trim();
-    if (!model) return { ok: false, error: 'model field is empty string' };
-    if (knownModels.length && !knownModels.includes(model)) {
-      return { ok: false, error: `unsupported model for ${job.provider}: ${model}` };
-    }
-  }
+  if (!TTS_JOB_SCHEMA.knownProviders.includes(job.provider)) return { ok: false, error: 'Audio provider is unavailable.' };
+  if (knownVoices.length && !knownVoices.includes(job.voice)) return { ok: false, error: 'Voice was not discovered.' };
+  if (knownModels.length && !knownModels.includes(job.model)) return { ok: false, error: 'Model was not discovered.' };
+  if (job.speed !== undefined && (typeof job.speed !== 'number' || !Number.isFinite(job.speed))) return { ok: false, error: 'Audio speed must be a finite number.' };
+  if (job.autoTag !== undefined && typeof job.autoTag !== 'boolean') return { ok: false, error: 'Audio tags must be on or off.' };
   return { ok: true };
 }
-
-// Validate a health response: ok must be exactly true (not truthy), and
-// workerId/kind must match exactly when reported. Missing identity fields
-// when expected is a validation failure, not acceptance.
 export function validateHealthResponse(json, { workerId, kind } = {}) {
-  if (!json || typeof json !== 'object') return { ok: false, error: 'health response is not an object' };
-  if (json.ok !== true) return { ok: false, error: 'health ok is not exactly true' };
-  if (workerId !== undefined) {
-    if (json.workerId === undefined) return { ok: false, error: 'health missing workerId' };
-    if (json.workerId !== workerId) return { ok: false, error: `health workerId mismatch: expected ${workerId}, got ${json.workerId}` };
-  }
-  if (kind !== undefined) {
-    if (json.kind === undefined) return { ok: false, error: 'health missing kind' };
-    if (json.kind !== kind) return { ok: false, error: `health kind mismatch: expected ${kind}, got ${json.kind}` };
+  if (json?.ok !== true || json.workerId !== workerId || json.kind !== kind ||
+      !Number.isSafeInteger(json.maxResultBytes) || json.maxResultBytes <= 0) {
+    return { ok: false, error: 'Gateway health identity or upload limit is unavailable.' };
   }
   return { ok: true };
 }
-
-// Compute a SHA-256 binding fingerprint from normalized URL + workerId + token.
-// Persisted hash only (no raw secret in logs/storage). Token change alone MUST
-// hold an in-flight job — this prevents silent redirect after credential rotation.
-export async function gatewayBindingFingerprint(baseUrl, workerId, token) {
-  const base = String(baseUrl || '').replace(/\/+$/, '');
-  const wid = String(workerId || '');
-  const tok = String(token || '');
-  const data = new TextEncoder().encode(`${base}|${wid}|${tok}`);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+function baseAddress(value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error('Enter the Gateway server address.'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Gateway address must be HTTP or HTTPS without credentials, query or fragment.');
+  return url.href.replace(/\/+$/, '');
 }
-
+export async function gatewayBindingFingerprint(baseUrl, workerId, token) {
+  const bytes = new TextEncoder().encode(JSON.stringify([baseAddress(baseUrl), workerId, token]));
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 export function buildGatewayClient(baseUrl, token) {
-  const base = String(baseUrl || '').replace(/\/+$/, '');
-  const authHeaders = () => ({
-    Authorization: `Bearer ${String(token || '')}`,
-    'Content-Type': 'application/json',
-  });
-
-  async function request(path, { method = 'GET', body, headers } = {}) {
-    const url = `${base}${path}`;
-    const res = await fetch(url, {
-      method,
-      headers: { ...authHeaders(), ...(headers || {}) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    return res;
+  const base = baseAddress(baseUrl);
+  if (typeof token !== 'string' || !token.trim()) throw new Error('Set the Gateway worker token.');
+  async function request(path, { json, body, idle = false, timeoutMs = 20000 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(base + path, {
+        method: json !== undefined || body ? 'POST' : 'GET',
+        headers: { Authorization: `Bearer ${token}`, ...(json === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        body: json === undefined ? body : JSON.stringify(json),
+        credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+      });
+      if (idle && response.status === 204) return null;
+      // Untrusted response bodies may contain echoed credentials.
+      if (!response.ok) throw new Error(`Gateway request failed (${response.status}).`);
+      let result;
+      try { result = await response.json(); } catch { throw new Error('Gateway returned unreadable JSON.'); }
+      if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Gateway returned an invalid response.');
+      return result;
+    } finally { clearTimeout(timer); }
   }
-
-  function jobPath(jobId, action) {
-    return `/api/workers/jobs/${encodeURIComponent(String(jobId || ''))}/${action}`;
+  const jobPath = (id, action) => `/api/workers/jobs/${encodeURIComponent(id)}/${action}`;
+  function accepted(result) {
+    if (result.ok !== true || result.ignored === true) throw new Error('Gateway did not accept this answer; work is retained.');
+    return result;
   }
-
   return {
-    async health() {
-      const res = await request('/api/workers/health');
-      if (!res.ok) throw new Error(`health check failed: ${res.status}`);
-      const json = await res.json().catch(() => ({}));
-      return { ok: json.ok === true, status: res.status, raw: json };
-    },
-
-    // Claim returns null when no job is available (204), or a validated job.
-    // Wire returns { job: {...} }, not raw job. Malformed response throws.
+    async health() { const raw = await request('/api/workers/health', { timeoutMs: 8000 }); return { ok: raw.ok === true, raw }; },
     async claim(workerId) {
-      const res = await request('/api/workers/claim', {
-        method: 'POST',
-        body: { workerId: String(workerId || ''), kind: GATEWAY_KIND },
-      });
-      if (res.status === 204) return null;
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        throw new Error(`claim failed: ${res.status} ${detail}`);
-      }
-      let envelope;
-      try {
-        envelope = await res.json();
-      } catch {
-        throw new Error('claim returned non-JSON body');
-      }
-      if (!envelope || typeof envelope !== 'object') throw new Error('claim returned non-object body');
-      const job = envelope.job;
-      if (!job || typeof job !== 'object') throw new Error('claim returned envelope without job');
-      if (!job.jobId) throw new Error('claim returned job without jobId');
-      const validation = validateTtsJob(job);
-      if (!validation.ok) throw new Error(`invalid tts job from gateway: ${validation.error}`);
-      return job;
+      if (typeof workerId !== 'string' || !workerId.trim() || workerId.length > 120) throw new Error('Worker ID must contain 1 to 120 characters.');
+      const envelope = await request('/api/workers/claim', { json: { workerId, kind: GATEWAY_KIND }, idle: true });
+      if (envelope === null) return null;
+      if (typeof envelope.job?.jobId !== 'string' || !envelope.job.jobId.trim()) throw new Error('Gateway claim has no job ID.');
+      return envelope.job;
     },
-
-    // Progress/fail use per-job routes. Body contains only phase/message or
-    // error/ambiguous — jobId is in the URL, not the body.
-    async progress(jobId, phase, message) {
-      const res = await request(jobPath(jobId, 'progress'), {
-        method: 'POST',
-        body: { phase: String(phase || ''), message: String(message || '') },
-      });
-      if (!res.ok) throw new Error(`progress report failed: ${res.status}`);
-      return { ok: true };
-    },
-
-    async fail(jobId, error, { ambiguous = true } = {}) {
-      const res = await request(jobPath(jobId, 'fail'), {
-        method: 'POST',
-        body: { error: String(error || ''), ambiguous: !!ambiguous },
-      });
-      if (!res.ok) throw new Error(`fail report failed: ${res.status}`);
-      return { ok: true };
-    },
-
-    // Result upload is multipart/form-data via per-job route. Returns parsed
-    // response. Only explicit ok:true AND ignored!==true acknowledges delivery.
-    // Malformed/empty/refused responses are NOT acknowledged.
-    async result(jobId, { mediaType, file }) {
-      if (!mediaType || !file) throw new Error('result requires mediaType and file');
+    async progress(id, phase, message = '') { return accepted(await request(jobPath(id, 'progress'), { json: { phase, message } })); },
+    async fail(id, error, { ambiguous = true } = {}) { return accepted(await request(jobPath(id, 'fail'), { json: { error: String(error?.message || error).slice(0, 500), ambiguous: ambiguous !== false } })); },
+    async result(id, { mediaType, file }) {
+      if (!TTS_JOB_SCHEMA.acceptedMediaTypes.includes(mediaType) || !(file instanceof Blob)) throw new Error('Gateway result needs supported audio bytes.');
       const form = new FormData();
-      form.append('mediaType', String(mediaType));
-      form.append('file', file);
-      const url = `${base}${jobPath(jobId, 'result')}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${String(token || '')}` },
-        body: form,
-      });
-      if (!res.ok) throw new Error(`result upload failed: ${res.status}`);
-      let json;
-      try {
-        json = await res.json();
-      } catch {
-        // Malformed body on 200: NOT acknowledged. Preserve staged bytes.
-        return { ok: false, ignored: false, acknowledged: false, raw: null };
-      }
-      if (!json || typeof json !== 'object') {
-        return { ok: false, ignored: false, acknowledged: false, raw: json };
-      }
-      const acknowledged = json.ok === true && json.ignored !== true;
-      return { ok: json.ok === true, ignored: json.ignored === true, acknowledged, raw: json };
+      form.append('mediaType', mediaType);
+      form.append('file', file, 'audio');
+      const raw = await request(jobPath(id, 'result'), { body: form, timeoutMs: 120000 });
+      return { ok: raw.ok === true, ignored: raw.ignored === true, acknowledged: raw.ok === true && raw.ignored !== true };
     },
   };
 }

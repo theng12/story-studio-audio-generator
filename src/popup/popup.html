@@ -63,9 +63,15 @@
       <select id="workingMode" aria-label="Working mode">
         <option value="studio">Story Studio</option>
         <option value="standalone">Standalone</option>
-        <option value="gateway">Gateway Worker</option>
+        <option value="gateway">Gateway Studio</option>
       </select>
     </label>
+
+    <section id="gatewayPane" hidden>
+      <p class="muted">Gateway supplies each script, model and voice. Enable the connection in Settings. A compatible audio worker server is required.</p>
+      <p id="gatewayStatus" role="status" aria-live="polite">Connection has not been checked.</p>
+      <button id="retryGatewayDelivery" hidden>Deliver retained audio</button>
+    </section>
 
     <div class="form-grid form-grid-setup">
       <label>Provider

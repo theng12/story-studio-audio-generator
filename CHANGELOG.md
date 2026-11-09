@@ -1,16 +1,12 @@
 # Changelog
 
-## 0.7.27 - Gateway third-mode TTS worker
+## 0.7.27 — 2026-11-09
 
-- Added opt-in Gateway third mode for claim-based TTS generation alongside Story Studio and Standalone modes, off by default.
-- Shares the existing generation mutex and human pacing with the local queue so only one provider generation runs at a time regardless of source.
-- Stages generated audio in the durable audio-artifacts cache across restarts; preserves exact bytes when delivery is ignored, malformed, or ambiguous rather than regenerating.
-- Validates health responses strictly (ok===true, exact workerId and kind match) and unwraps the {job:...} claim envelope before any provider call.
-- Detects gateway URL or worker ID changes mid-flight via a non-secret binding fingerprint and holds for review instead of redirecting an in-flight job.
-- Defaults fail ambiguity to true after provider invocation; never silently retries paid generation.
-- Maps gateway job model to an explicit providerSettings snapshot without substituting account or local defaults.
-- Added Options page fields for gateway URL, token, and worker ID with Grant/Test handlers matching the fleet pattern.
-- Preserved migrateLegacySettings allowlist for 'gateway' mode so upgrades do not strip the setting.
+- Added an optional Gateway Studio mode alongside Story Studio and Standalone.
+- Keep completed audio when delivery is interrupted, without generating it again.
+- Deliver retained audio from the side panel after checking the connection.
+- Hold unfinished work when the connection changes or the generation outcome is unknown.
+- Gateway mode requires a compatible server with audio workers enabled.
 
 ## 0.7.26 - Audio Generator cleanup
 

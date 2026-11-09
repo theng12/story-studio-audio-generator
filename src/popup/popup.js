@@ -120,8 +120,22 @@ async function init() {
     renderActivityElapsed();
     renderConnectionStatus();
   }, 1000);
+  const renderGatewayStatus = (state) => {
+    $('gatewayStatus').textContent = state?.error || (state?.phase === 'generating' ? 'Generating audio for Gateway.' : state?.phase === 'uploading' ? 'Delivering retained audio to Gateway.' : state?.lastJob ? 'Audio delivered to Gateway.' : state?.idle ? 'Waiting for Gateway audio jobs.' : 'Connection has not been checked.');
+    $('retryGatewayDelivery').hidden = !state?.held || !state?.jobId;
+  };
+  renderGatewayStatus((await chrome.storage.local.get('gatewayStatus')).gatewayStatus);
+  $('retryGatewayDelivery').onclick = async () => {
+    const button = $('retryGatewayDelivery');
+    button.disabled = true;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'retryGatewayDelivery' });
+      if (response?.ok === false) $('gatewayStatus').textContent = response.error;
+    } finally { button.disabled = false; }
+  };
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (changes.gatewayStatus) renderGatewayStatus(changes.gatewayStatus.newValue);
     if (changes.lastStatus) {
       liveStatus = changes.lastStatus.newValue || null;
       applyLiveStatus();
@@ -173,7 +187,7 @@ async function init() {
     updateStudioHints();
     renderSections(); // re-render (enables/disables already-voiced rows) — no refetch
   });
-  if (!isStandaloneMode()) await initStudio();
+  if (!isStandaloneMode() && !isGatewayMode()) await initStudio();
 }
 
 function renderProviderOptions() {
@@ -200,10 +214,12 @@ function renderWorkingMode() {
   $('studioPane').hidden = standalone || gateway;
   $('studioBatchActions').hidden = standalone || gateway;
   $('standalonePane').hidden = !standalone;
+  $('gatewayPane').hidden = !gateway;
 }
 
 async function changeWorkingMode() {
   await persist({ mode: $('workingMode').value });
+  await chrome.runtime.sendMessage({ type: 'refreshGatewayAgent' });
   renderWorkingMode();
   if (isStandaloneMode()) {
     status('Standalone mode uses a local script and Downloads.');

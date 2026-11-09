@@ -92,6 +92,8 @@ export function providerCooldown(settings, providerId) {
 }
 
 const STORAGE_KEY = 'settings';
+const GATEWAY_SETTINGS_KEY = 'gatewaySettings';
+const GATEWAY_LOCAL_FIELDS = ['gatewayModeEnabled', 'gatewayBaseUrl'];
 const STUDIO_URL_KEY = 'studioBaseUrl';
 const STUDIO_USERNAME_KEY = 'studioUsername';
 const STUDIO_PASSWORD_KEY = 'studioPassword';
@@ -120,7 +122,7 @@ function migrateLegacySettings(settings) {
 export async function getSettings() {
   const [stored, local, session] = await Promise.all([
     chrome.storage.sync.get(STORAGE_KEY),
-    chrome.storage.local.get([STUDIO_URL_KEY, STUDIO_USERNAME_KEY, LEGACY_CRED_KEY]),
+    chrome.storage.local.get([STUDIO_URL_KEY, STUDIO_USERNAME_KEY, LEGACY_CRED_KEY, GATEWAY_SETTINGS_KEY]),
     chrome.storage.session.get(STUDIO_PASSWORD_KEY),
   ]);
   const saved = stored[STORAGE_KEY] || {};
@@ -131,12 +133,18 @@ export async function getSettings() {
   const credentials = await migrateLegacyCredentials(local, session);
   if (Object.keys(localPatch).length) await chrome.storage.local.set(localPatch);
   const next = { ...migrated };
+  const gateway = { ...(local[GATEWAY_SETTINGS_KEY] || {}) };
+  for (const key of GATEWAY_LOCAL_FIELDS) {
+    if (!Object.hasOwn(gateway, key) && Object.hasOwn(next, key)) gateway[key] = next[key];
+    delete next[key];
+  }
+  if (JSON.stringify(gateway) !== JSON.stringify(local[GATEWAY_SETTINGS_KEY] || {})) await chrome.storage.local.set({ [GATEWAY_SETTINGS_KEY]: gateway });
   delete next.studioBaseUrl;
   delete next.studioUsername;
   if (JSON.stringify(saved) !== JSON.stringify(next)) {
     await chrome.storage.sync.set({ [STORAGE_KEY]: next });
   }
-  return { ...DEFAULTS, ...next, studioBaseUrl: local[STUDIO_URL_KEY] ?? localPatch[STUDIO_URL_KEY] ?? DEFAULTS.studioBaseUrl, studioUsername: credentials.username || localPatch[STUDIO_USERNAME_KEY] || DEFAULTS.studioUsername };
+  return { ...DEFAULTS, ...next, ...gateway, studioBaseUrl: local[STUDIO_URL_KEY] ?? localPatch[STUDIO_URL_KEY] ?? DEFAULTS.studioBaseUrl, studioUsername: credentials.username || localPatch[STUDIO_USERNAME_KEY] || DEFAULTS.studioUsername };
 }
 
 export async function saveSettings(patch) {
@@ -144,6 +152,9 @@ export async function saveSettings(patch) {
   const { studioBaseUrl, studioUsername, ...syncPatch } = patch;
   const next = { ...current, ...syncPatch, ...(studioBaseUrl === undefined ? {} : { studioBaseUrl }), ...(studioUsername === undefined ? {} : { studioUsername }) };
   const { studioBaseUrl: _url, studioUsername: _username, ...syncNext } = next;
+  const gateway = {};
+  for (const key of GATEWAY_LOCAL_FIELDS) { gateway[key] = next[key]; delete syncNext[key]; }
+  await chrome.storage.local.set({ [GATEWAY_SETTINGS_KEY]: gateway });
   await chrome.storage.sync.set({ [STORAGE_KEY]: syncNext });
   const localPatch = {};
   if (studioBaseUrl !== undefined) localPatch[STUDIO_URL_KEY] = String(studioBaseUrl || '');
