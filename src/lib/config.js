@@ -65,6 +65,11 @@ export const DEFAULTS = {
   fleetAgentName: '',
   fleetTelemetryDetails: false,
   fleetQueueControlEnabled: false,
+  // Gateway third-mode (opt-in, off by default). Worker token and URL stay in
+  // local storage — never synced, never logged. The worker ID is generated
+  // once and persisted locally so re-installs keep the same identity.
+  gatewayModeEnabled: false,
+  gatewayBaseUrl: '',
 };
 
 export { PROVIDER_SETTING_DEFAULTS } from './providers.js';
@@ -188,4 +193,23 @@ export async function getFleetPairingSecret() {
 
 export async function saveFleetPairingSecret(secret) {
   await chrome.storage.local.set({ [FLEET_SECRET_KEY]: String(secret || '') });
+}
+
+// Gateway worker token and ID are local-only (never synced, never logged).
+const GATEWAY_TOKEN_KEY = 'gatewayWorkerToken';
+const GATEWAY_WORKER_ID_KEY = 'gatewayWorkerId';
+
+export async function getGatewayCredentials() {
+  const stored = await chrome.storage.local.get([GATEWAY_TOKEN_KEY, GATEWAY_WORKER_ID_KEY]);
+  return {
+    token: typeof stored[GATEWAY_TOKEN_KEY] === 'string' ? stored[GATEWAY_TOKEN_KEY] : '',
+    workerId: typeof stored[GATEWAY_WORKER_ID_KEY] === 'string' ? stored[GATEWAY_WORKER_ID_KEY] : '',
+  };
+}
+
+export async function saveGatewayCredentials({ token, workerId }) {
+  const patch = {};
+  if (token !== undefined) patch[GATEWAY_TOKEN_KEY] = String(token || '');
+  if (workerId !== undefined) patch[GATEWAY_WORKER_ID_KEY] = String(workerId || '');
+  if (Object.keys(patch).length) await chrome.storage.local.set(patch);
 }

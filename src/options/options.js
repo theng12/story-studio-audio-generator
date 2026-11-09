@@ -3,8 +3,10 @@ import {
   saveSettings,
   getCredentials,
   getFleetPairingSecret,
+  getGatewayCredentials,
   saveCredentials,
   saveFleetPairingSecret,
+  saveGatewayCredentials,
   DEFAULTS,
 } from '../lib/config.js';
 import { StudioClient } from '../lib/story-studio.js';
@@ -14,8 +16,8 @@ const $ = (id) => document.getElementById(id);
 // Fields that have an input on THIS page. (The voice lives in the side panel,
 // not here — don't list fishVoice or $(f) is null and load() aborts before the
 // buttons are wired.)
-const FIELDS = ['theme', 'studioBaseUrl', 'fleetHubUrl', 'fleetAgentName'];
-const CHECKBOX_FIELDS = ['fleetAgentEnabled', 'fleetTelemetryDetails', 'fleetQueueControlEnabled'];
+const FIELDS = ['theme', 'studioBaseUrl', 'fleetHubUrl', 'fleetAgentName', 'gatewayBaseUrl'];
+const CHECKBOX_FIELDS = ['fleetAgentEnabled', 'fleetTelemetryDetails', 'fleetQueueControlEnabled', 'gatewayModeEnabled'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
 
@@ -30,6 +32,9 @@ async function load() {
   $('studioUsername').value = cred.username || '';
   $('studioPassword').value = cred.password || '';
   $('fleetPairingSecret').value = await getFleetPairingSecret();
+  const gwCreds = await getGatewayCredentials();
+  $('gatewayWorkerToken').value = gwCreds.token || '';
+  $('gatewayWorkerId').value = gwCreds.workerId || '';
   const { fleetStatus } = await chrome.storage.local.get('fleetStatus');
   if (fleetStatus?.at) showFleetHealth(fleetStatus);
   $('save').addEventListener('click', save);
@@ -76,6 +81,10 @@ async function save({ refreshFleet = true } = {}) {
     for (const f of CHECKBOX_FIELDS) if ($(f)) patch[f] = $(f).checked;
     await saveSettings(patch);
     await saveFleetPairingSecret($('fleetPairingSecret').value);
+    await saveGatewayCredentials({
+      token: $('gatewayWorkerToken').value,
+      workerId: $('gatewayWorkerId').value.trim(),
+    });
     await saveCredentials({
       username: $('studioUsername').value.trim(),
       password: $('studioPassword').value, // not trimmed — passwords may have spaces

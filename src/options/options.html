@@ -91,6 +91,28 @@
       <p class="hint">Hub controls are limited to pause-after-current, resume of a Hub pause, and clear pending. Provider, model, voice, pacing, cooldown, credentials, and site permissions remain local.</p>
     </section>
 
+    <section class="card">
+      <h3>Gateway Worker (opt-in)</h3>
+      <label class="checkbox">
+        <input id="gatewayModeEnabled" type="checkbox" />
+        <span>Enable Gateway third-mode worker</span>
+      </label>
+      <p class="hint">Off by default. When enabled, the extension polls a Relay Gateway for TTS jobs using a local worker token. Jobs are driven through the existing provider tab pipeline; ambiguous failures hold the job for manual review.</p>
+      <label>
+        <span>Gateway URL</span>
+        <input id="gatewayBaseUrl" placeholder="http://localhost:8799" />
+      </label>
+      <label>
+        <span>Worker Token</span>
+        <input id="gatewayWorkerToken" type="password" autocomplete="new-password" placeholder="Bearer token issued by the Gateway" />
+      </label>
+      <label>
+        <span>Worker ID</span>
+        <input id="gatewayWorkerId" placeholder="Unique worker identifier" />
+      </label>
+      <p class="hint">Token and worker ID stay in this browser profile only — never synced, never logged.</p>
+    </section>
+
     <div class="row end settings-footer">
       <span id="status" class="muted small"></span>
       <button id="save" class="primary">Save</button>

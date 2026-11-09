@@ -188,11 +188,17 @@ function isStandaloneMode() {
   return settings?.mode === 'standalone';
 }
 
+function isGatewayMode() {
+  return settings?.mode === 'gateway';
+}
+
 function renderWorkingMode() {
-  const standalone = isStandaloneMode();
-  $('workingMode').value = standalone ? 'standalone' : 'studio';
-  $('studioPane').hidden = standalone;
-  $('studioBatchActions').hidden = standalone;
+  const mode = settings?.mode || 'studio';
+  $('workingMode').value = mode;
+  const standalone = mode === 'standalone';
+  const gateway = mode === 'gateway';
+  $('studioPane').hidden = standalone || gateway;
+  $('studioBatchActions').hidden = standalone || gateway;
   $('standalonePane').hidden = !standalone;
 }
 
@@ -201,6 +207,10 @@ async function changeWorkingMode() {
   renderWorkingMode();
   if (isStandaloneMode()) {
     status('Standalone mode uses a local script and Downloads.');
+    return;
+  }
+  if (isGatewayMode()) {
+    status('Gateway worker mode — configure in Options.');
     return;
   }
   await initStudio();

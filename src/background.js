@@ -9,17 +9,21 @@
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getCredentials, getFleetPairingSecret, getSettings, getProviderSettings, isLocalStudioUrl, providerCooldown, requiresStudioPassword } from './lib/config.js';
+import { getCredentials, getFleetPairingSecret, getGatewayCredentials, getSettings, getProviderSettings, isLocalStudioUrl, providerCooldown, requiresStudioPassword } from './lib/config.js';
 import { StudioClient } from './lib/story-studio.js';
 import { sectionSlugFromFile } from './lib/naming.js';
 import { sectionEligibility, storyStudioSection } from './lib/section-contracts.js';
 import { PROVIDERS, assertProviderSettingsSnapshot, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
 import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
 import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
+import { buildGatewayClient, GATEWAY_KIND } from './lib/gateway-client.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
 const FLEET_ALARM = 'fleetHeartbeat';
+const GATEWAY_ALARM = 'gatewayPoll';
+const GATEWAY_POLL_MINUTES = 0.5;
+const GATEWAY_STATUS_KEY = 'gatewayStatus';
 const FLEET_PATH = '/api/v2/agents/heartbeat';
 const FLEET_PROTOCOL_VERSION = 2;
 const FLEET_IDENTITY_KEY = 'fleetIdentity';
@@ -1165,16 +1169,91 @@ chrome.alarms?.onAlarm?.addListener((a) => {
   if (a.name === ALARM) {
     processQueue();
     fleetHeartbeat();
+    gatewayPoll();
   } else if (a.name === FLEET_ALARM) {
     fleetHeartbeat();
+  } else if (a.name === GATEWAY_ALARM) {
+    gatewayPoll();
   }
 });
+
+// ── Gateway third-mode worker ────────────────────────────────────────────────
+// Opt-in claim-based TTS worker. Polls the Gateway for audio jobs, drives the
+// existing provider tab pipeline (produceAudio), and uploads results. Runs on
+// the same MV3 alarm lifecycle as the local queue. Off by default; never
+// touches the local queue or Fleet Hub. No automatic paid retries: ambiguous
+// failures hold the job for manual review.
+let gatewayPollInFlight = false;
+
+async function ensureGatewayAlarm(settings = null) {
+  const configured = settings || await getSettings();
+  try {
+    if (configured.gatewayModeEnabled && String(configured.gatewayBaseUrl || '').trim()) {
+      chrome.alarms.create(GATEWAY_ALARM, { periodInMinutes: GATEWAY_POLL_MINUTES });
+    } else {
+      chrome.alarms.clear(GATEWAY_ALARM);
+    }
+  } catch {
+    /* alarms unavailable */
+  }
+}
+
+async function gatewayPoll() {
+  if (gatewayPollInFlight) return;
+  gatewayPollInFlight = true;
+  try {
+    const settings = await getSettings();
+    if (!settings.gatewayModeEnabled) return;
+    const baseUrl = String(settings.gatewayBaseUrl || '').trim();
+    if (!baseUrl) return;
+    const creds = await getGatewayCredentials();
+    if (!creds.token || !creds.workerId) {
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: 'worker token or id missing' } });
+      return;
+    }
+    const client = buildGatewayClient(baseUrl, creds.token);
+    let job;
+    try {
+      job = await client.claim(creds.workerId);
+    } catch (error) {
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240) } });
+      return;
+    }
+    if (!job) {
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true } });
+      return;
+    }
+    // Drive the job through the existing provider pipeline. Progress/fail/result
+    // are reported back to the Gateway; ambiguous failures hold the job (no
+    // automatic paid retry/regeneration/reassignment).
+    try {
+      await client.progress(job.jobId || job.id, 'generating', 'starting provider');
+      const audio = await produceAudio(job, settings);
+      await client.progress(job.jobId || job.id, 'uploading', 'sending result');
+      const blob = new Blob([Uint8Array.from(atob(audio.base64), (c) => c.charCodeAt(0))], { type: audio.mime });
+      await client.result(job.jobId || job.id, { mediaType: audio.mime, file: blob });
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), lastJob: job.jobId || job.id } });
+    } catch (error) {
+      const ambiguous = !!error?.ambiguous || isAmbiguousBridgeFailure(error);
+      try {
+        await client.fail(job.jobId || job.id, String(error.message || error), { ambiguous });
+      } catch {
+        /* best-effort fail report */
+      }
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error.message || error).slice(0, 240), ambiguous, jobId: job.jobId || job.id } });
+    }
+  } finally {
+    gatewayPollInFlight = false;
+  }
+}
 
 // MV3 workers are routinely suspended while idle. A durable alarm restores
 // idle telemetry without touching a provider tab or the local queue.
 getSettings().then((settings) => {
   ensureFleetAlarm(settings);
+  ensureGatewayAlarm(settings);
   if (settings.fleetAgentEnabled) fleetHeartbeat();
+  if (settings.gatewayModeEnabled) gatewayPoll();
 }).catch(() => {});
 
 async function providerInventory(providerId) {
