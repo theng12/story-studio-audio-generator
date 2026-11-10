@@ -23,9 +23,9 @@ function cacheStorage() {
   }; } };
 }
 async function waitFor(predicate) { for (let n = 0; n < 400; n++) { if (predicate()) return; await pause(5); } throw new Error('Actual audio background fixture timed out.'); }
-async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled = true, autoStart = false, job = JOB, answers = [{ ok: true }], onGenerate, providerFailure, lostClaim = false, uploadLimit = 1024, voices = [{ id: 'v1', name: 'Fixture voice' }] } = {}) {
+async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled = true, autoStart = false, job = JOB, answers = [{ ok: true }], onGenerate, onSave, providerFailure, providerReply, tabs = [{ id: 7, status: 'complete' }], failAnswer = { ok: true }, lostClaim = false, uploadLimit = 1024, voices = [{ id: 'v1', name: 'Fixture voice' }] } = {}) {
   local ||= { gatewaySettings: { gatewayModeEnabled: enabled, gatewayBaseUrl: 'http://gateway.invalid' }, gatewayWorkerToken: 'fixture-only', gatewayWorkerId: 'fixture-audio' };
-  const sync = { settings: { mode, humanDelayMinSec: 0, humanDelayMaxSec: 0, providerSettings: { fish: { model: 'wrong-local-model', speed: 1.9 } } } };
+  const sync = { settings: { mode, maxRetries: 0, humanDelayMinSec: 0, humanDelayMaxSec: 0, providerSettings: { fish: { model: 'wrong-local-model', speed: 1.9 } } } };
   const savedEnabled = local.gatewaySettings.gatewayModeEnabled;
   if (!autoStart) local.gatewaySettings.gatewayModeEnabled = false;
   const previous = Object.fromEntries(['chrome', 'fetch', 'caches'].map((key) => [key, globalThis[key]]));
@@ -36,15 +36,19 @@ async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled =
     alarms: { create() {}, clear() {}, onAlarm: { addListener(fn) { alarms.push(fn); } } },
     runtime: { onInstalled: { addListener() {} }, onMessage: { addListener(fn) { listener = fn; } } },
     sidePanel: { setPanelBehavior: async () => {} },
+    downloads: {
+      async download(options) { await onSave?.(options); return 17; },
+      async search() { return [{ id: 17, state: 'complete', filename: 'fixture.wav' }]; },
+    },
     tabs: {
-      query: async () => [{ id: 7, status: 'complete' }],
+      query: async () => tabs,
       async sendMessage(id, message) {
         provider.push(clone(message));
         if (message.type === 'fish:inventory') return { ok: true, raw: { fishModelOptions: { labels: ['Fish Audio S2.1 Pro'], complete: true }, voices } };
         if (message.type === 'fish:generate') {
           await onGenerate?.(local);
           if (providerFailure) throw new Error('Fixture provider outcome unknown.');
-          return { ok: true, base64: AUDIO.toString('base64'), mime: 'audio/wav' };
+          return providerReply || { ok: true, base64: AUDIO.toString('base64'), mime: 'audio/wav' };
         }
         throw new Error(`Unexpected provider operation ${message.type}`);
       },
@@ -52,12 +56,17 @@ async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled =
   };
   globalThis.caches = cache;
   globalThis.fetch = async (url, init = {}) => {
-    assert.equal(new URL(url).origin, 'http://gateway.invalid', 'No network or Story endpoint allowed.');
+    if (mode === 'studio' && url === 'http://localhost:8766/api/projects/fixture/episodes/E01/audio-ingest') {
+      await onSave?.(JSON.parse(init.body));
+      return Response.json({ saved_as: 'fixture.wav', audio_dir: 'fixture' });
+    }
+    assert.equal(new URL(url).origin, 'http://gateway.invalid', 'No network or unmocked Story endpoint allowed.');
     const call = { url, init }; calls.push(call);
     if (url.endsWith('/health')) return Response.json({ ok: true, workerId: 'fixture-audio', kind: 'audio', maxResultBytes: uploadLimit });
     if (url.endsWith('/claim')) { if (lostClaim) throw new Error('Fixture claim outcome unknown.'); return job ? Response.json({ job }) : new Response(null, { status: 204 }); }
     if (url.endsWith('/result')) { call.bytes = Buffer.from(await init.body.get('file').arrayBuffer()); call.mime = init.body.get('mediaType'); return Response.json(answers.length > 1 ? answers.shift() : answers[0]); }
-    if (/\/(progress|fail)$/.test(url)) return Response.json({ ok: true });
+    if (url.endsWith('/fail')) return Response.json(failAnswer);
+    if (url.endsWith('/progress')) return Response.json({ ok: true });
     throw new Error(`Unexpected HTTP ${url}`);
   };
   await import(`../src/background.js?gateway-runtime=${Date.now()}-${Math.random()}`);
@@ -88,6 +97,51 @@ test('real claim/inventory/generation/upload returns exact bytes with authoritat
     assert.equal(worker.cache.rows.size, 0);
     assert.equal(worker.local.gatewayInFlightJobId, undefined);
     assert.equal(worker.sync.settings.gatewayBaseUrl, undefined);
+  } finally { worker.restore(); }
+});
+
+test('no open workspace leaves Gateway jobs unclaimed across repeated ticks', async () => {
+  const worker = await boot({ tabs: [] });
+  try {
+    for (let n = 0; n < 2; n++) {
+      worker.tick();
+      await waitFor(() => worker.local.gatewayStatus?.error);
+      await worker.settled();
+    }
+    assert.match(worker.local.gatewayStatus.error, /Open a signed-in audio workspace/);
+    assert.equal(worker.calls.filter((entry) => /\/(claim|fail)$/.test(entry.url)).length, 0);
+    assert.equal(worker.local.gatewayInFlightPhase, undefined);
+    assert.equal(worker.provider.length, 0);
+  } finally { worker.restore(); }
+});
+
+for (const code of [402, 429]) {
+  test(`explicit provider ${code} is acknowledged as non-ambiguous and pauses before another claim`, async () => {
+    const worker = await boot({ providerReply: { ok: false, error: `Provider ${code}: limit reached`, limit: true, ambiguous: false } });
+    try {
+      worker.tick();
+      await waitFor(() => worker.local.gatewayStatus?.error);
+      await worker.settled();
+      assert.equal(JSON.parse(worker.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, false);
+      assert.equal(worker.local.gatewayStatus.ambiguous, false);
+      assert.equal(worker.local.gatewayStatus.held, false);
+      assert.equal(worker.local.gatewayInFlightPhase, undefined);
+      assert.equal(worker.local.queuePaused, true);
+      worker.tick(); await worker.settled();
+      assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+    } finally { worker.restore(); }
+  });
+}
+
+test('unacknowledged explicit provider rejection remains held without another claim', async () => {
+  const worker = await boot({ providerReply: { ok: false, error: 'Provider rejected request', ambiguous: false }, failAnswer: { ok: true, ignored: true } });
+  try {
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.held); await worker.settled();
+    assert.equal(worker.local.gatewayInFlightPhase, 'generating');
+    worker.tick(); await worker.settled();
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
   } finally { worker.restore(); }
 });
 
@@ -166,6 +220,40 @@ test('wrong mode/disabled never claims; missing model/voice and unknown live voi
     } finally { worker.restore(); }
   }
 });
+
+for (const mode of ['studio', 'standalone']) {
+  test(`${mode} saves retained audio after a failed save without generating twice or claiming Gateway work`, async () => {
+    const saves = [];
+    const worker = await boot({ mode, onSave(payload) { saves.push(payload); if (saves.length === 1) throw new Error('Fixture save unavailable.'); } });
+    try {
+      const item = {
+        id: 'local-save', text: 'Local fixture narration.', label: 'Fixture', provider: 'fish', voice: 'v1',
+        providerSettings: { model: 's2.1-pro', speed: 1, modelMeta: { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro' } },
+        ...(mode === 'studio'
+          ? { kind: 'script', slug: 'fixture', episodeCode: 'E01', sectionSlug: 'Script', chapterNumber: null }
+          : { kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/fixture.mp3' }),
+      };
+      assert.equal((await worker.send({ type: 'enqueue', items: [item] })).added, 1);
+      await waitFor(() => worker.local.queue?.[0]?.status === 'failed');
+      await worker.settled();
+      assert.equal(worker.cache.rows.size, 1);
+      assert.equal(worker.local.queue[0].phase, 'saving');
+      assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
+      await waitFor(() => worker.local.queue?.[0]?.status === 'done');
+      await worker.settled();
+      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+      assert.equal(saves.length, 2);
+      if (mode === 'studio') assert.deepEqual(Buffer.from(saves[1].audioBase64, 'base64'), AUDIO);
+      else {
+        assert.equal(saves[1].filename, 'StoryStudioAudio/Standalone/fixture.wav');
+        assert.deepEqual(Buffer.from(saves[1].url.split(',')[1], 'base64'), AUDIO);
+      }
+      worker.tick(); await worker.settled();
+      assert.equal(worker.calls.length, 0);
+      assert.equal(worker.cache.rows.size, 0);
+    } finally { worker.restore(); }
+  });
+}
 
 test('upload limit retains output; lock prevents local enqueue from generating concurrently', async () => {
   let release;

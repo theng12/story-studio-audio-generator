@@ -1278,6 +1278,9 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
     await waitForNextRun(null);
     if (await isPaused()) return { ok: true, paused: true };
     const connection = await gatewayConnection();
+    // The claim does not reveal its provider until acquired; avoid consuming work with no workspace open.
+    const tabs = await Promise.all(Object.values(PROVIDERS).map(findProviderTab));
+    if (!tabs.some(Boolean)) throw new Error('Open a signed-in audio workspace before taking Gateway work.');
     binding = connection.binding;
     await setGatewayInFlight('', binding, 'claiming');
     const job = await connection.client.claim(connection.creds.workerId);
@@ -1301,18 +1304,22 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
     await deliverGatewayAudio({ jobId, binding, phase: 'staged' });
     return { ok: true };
   } catch (error) {
+    const ambiguous = attempted && error?.ambiguous !== false;
     if (jobId && binding) {
       try {
         const staged = await getAudioArtifact(caches, artifactDescriptor(`gateway:${jobId}`));
         if (!staged) {
           const connection = await gatewayConnection(binding);
-          await connection.client.fail(jobId, error, { ambiguous: attempted });
-          if (!attempted) await clearGatewayInFlight();
+          await connection.client.fail(jobId, error, { ambiguous });
+          if (!ambiguous) {
+            if (error?.limit) await setQueuePaused(true);
+            await clearGatewayInFlight();
+          }
         }
       } catch { /* Unknown answers hold. Never race retained result bytes with /fail. */ }
     }
     const state = await getGatewayInFlight();
-    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error?.message || error).slice(0, 240), jobId: state.jobId, held: !!(state.jobId || state.phase), ambiguous: attempted } });
+    await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), error: String(error?.message || error).slice(0, 240), jobId: state.jobId, held: !!(state.jobId || state.phase), ambiguous } });
     return { ok: false, error: String(error?.message || error) };
   } finally {
     if (attempted) await armHumanDelay(await getSettings());
