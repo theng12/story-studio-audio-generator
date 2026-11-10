@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildGatewayClient, gatewayBindingFingerprint, validateHealthResponse, validateTtsJob } from '../src/lib/gateway-client.js';
+import { buildGatewayClient, gatewayBindingFingerprint, prepareAudioInventory, validateHealthResponse, validateTtsJob } from '../src/lib/gateway-client.js';
 const job = { jobId: 'audio/a', kind: 'audio', provider: 'fish', voice: 'v1', text: 'Hello.', model: 's2.1-pro' };
 
 test('actual settings migration keeps the third mode and moves Gateway configuration out of sync', async () => {
@@ -42,6 +42,36 @@ test('health requires exact identity and a finite positive upload limit', () => 
   for (const patch of [{ ok: 1 }, { workerId: undefined }, { kind: 'video' }, { maxResultBytes: 0 }, { maxResultBytes: NaN }]) assert.equal(validateHealthResponse({ ...health, ...patch }, expected).ok, false);
 });
 
+const INVENTORY_HEALTH = { audioInventoryMaxAgeSeconds: 90, audioInventoryMaxBytes: 1048576 };
+const observed = (patch = {}) => ({ ok: true, inventory: { source: 'live', complete: true, fetchedAt: 100000,
+  models: [{ id: 'model', label: 'Private label', maxChars: 4500, speed: true }],
+  voices: [{ id: 'voice', title: 'Private title' }], ...patch } });
+
+test('inventory carries only observed IDs and original time, never labels or normalized capabilities', () => {
+  const inventory = prepareAudioInventory({ fish: observed(), elevenlabs_web: observed({ source: 'fallback' }) }, 'worker', INVENTORY_HEALTH, 100100);
+  assert.deepEqual(inventory, { schema: 1, providers: { fish: { source: 'live', complete: true, fetchedAt: 100000, models: [{ id: 'model' }], voices: [{ id: 'voice' }] } } });
+  assert.equal(prepareAudioInventory({ fish: observed() }, 'worker', INVENTORY_HEALTH, 100200).providers.fish.fetchedAt, 100000);
+  for (const patch of [{ source: 'fallback' }, { source: 'discovered' }, { complete: false }, { models: [] }, { voices: [] }, { voices: [{ id: '' }] }, { models: [{ id: 4 }] }]) {
+    assert.deepEqual(prepareAudioInventory({ fish: observed(patch) }, 'worker', INVENTORY_HEALTH, 100100).providers, {});
+  }
+  assert.deepEqual(prepareAudioInventory({ fish: { ...observed(), ok: false } }, 'worker', INVENTORY_HEALTH, 100100).providers, {});
+});
+
+test('inventory rejects future/expired observations and uses server limits without timestamp repair or truncation', () => {
+  for (const fetchedAt of [0, 100101, 10100, NaN, 1.5]) {
+    assert.throws(() => prepareAudioInventory({ fish: observed({ fetchedAt }) }, 'worker', INVENTORY_HEALTH, 100100), /90 second age limit/);
+  }
+  assert.equal(prepareAudioInventory({ fish: observed({ fetchedAt: 10101 }) }, 'worker', INVENTORY_HEALTH, 100100).providers.fish.fetchedAt, 10101);
+  for (const patch of [{ audioInventoryMaxAgeSeconds: undefined }, { audioInventoryMaxAgeSeconds: 0 }, { audioInventoryMaxBytes: undefined }, { audioInventoryMaxBytes: 1.5 }]) {
+    assert.throws(() => prepareAudioInventory({}, 'worker', { ...INVENTORY_HEALTH, ...patch }, 100100), /limits are unavailable/);
+  }
+  const observations = { fish: observed({ voices: [{ id: 'អ' }] }) };
+  const audioInventory = prepareAudioInventory(observations, 'worker', INVENTORY_HEALTH, 100100);
+  const bytes = new TextEncoder().encode(JSON.stringify({ workerId: 'worker', kind: 'audio', audioInventory })).byteLength;
+  assert.deepEqual(prepareAudioInventory(observations, 'worker', { ...INVENTORY_HEALTH, audioInventoryMaxBytes: bytes }, 100100), audioInventory);
+  assert.throws(() => prepareAudioInventory(observations, 'worker', { ...INVENTORY_HEALTH, audioInventoryMaxBytes: bytes - 1 }, 100100), new RegExp(`Gateway allows ${bytes - 1} bytes`));
+});
+
 test('binding normalizes address and changes on token/identity rotation', async () => {
   const first = await gatewayBindingFingerprint('http://gateway.invalid', 'worker', 'fixture');
   assert.match(first, /^[0-9a-f]{64}$/);
@@ -77,6 +107,24 @@ test('wire paths/envelope, explicit answers and no credential redirects', async 
     answer = {};
     await assert.rejects(client.fail(job.jobId, 'fixture'), /did not accept/);
   } finally { globalThis.fetch = original; }
+});
+
+test('claim transports the inventory with existing bearer scope and distinguishes definite rejection from an unknown answer', async () => {
+  const previous = globalThis.fetch;
+  const client = buildGatewayClient('http://gateway.invalid', 'fixture');
+  const audioInventory = prepareAudioInventory({ fish: observed() }, 'worker', INVENTORY_HEALTH, 100100);
+  let sent;
+  try {
+    globalThis.fetch = async (_url, init) => { sent = init; return new Response(null, { status: 204 }); };
+    assert.equal(await client.claim('worker', audioInventory), null);
+    assert.deepEqual(JSON.parse(sent.body), { workerId: 'worker', kind: 'audio', audioInventory });
+    assert.equal(sent.headers.Authorization, 'Bearer fixture');
+    for (const status of [413, 422, 500]) {
+      globalThis.fetch = async () => new Response('reflected-private-secret', { status });
+      await assert.rejects(client.claim('worker', audioInventory), (error) =>
+        !!error.claimRejected === (status !== 500) && !error.message.includes('reflected'));
+    }
+  } finally { globalThis.fetch = previous; }
 });
 
 test('idle204 and error bodies do not leak echoed credentials', async () => {

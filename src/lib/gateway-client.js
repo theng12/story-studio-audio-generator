@@ -26,6 +26,33 @@ export function validateHealthResponse(json, { workerId, kind } = {}) {
   }
   return { ok: true };
 }
+export function prepareAudioInventory(observations, workerId, health, now = Date.now()) {
+  const maxAgeSeconds = health?.audioInventoryMaxAgeSeconds;
+  const maxBytes = health?.audioInventoryMaxBytes;
+  if (!Number.isFinite(maxAgeSeconds) || maxAgeSeconds <= 0 || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error('Gateway inventory age and byte limits are unavailable.');
+  }
+  const providers = {};
+  for (const provider of TTS_JOB_SCHEMA.knownProviders) {
+    const response = observations[provider];
+    const inventory = response?.inventory;
+    if (response?.ok !== true || inventory?.source !== 'live' || inventory.complete !== true) continue;
+    if (![inventory.models, inventory.voices].every((rows) => Array.isArray(rows) && rows.length && rows.every((row) => typeof row?.id === 'string' && row.id.trim()))) continue;
+    const fetchedAt = inventory.fetchedAt;
+    if (!Number.isSafeInteger(fetchedAt) || fetchedAt <= 0 || fetchedAt > now || now - fetchedAt >= maxAgeSeconds * 1000) {
+      throw new Error(`Audio inventory must be observed within Gateway's ${maxAgeSeconds} second age limit, without a future timestamp. Refresh the workspace and check the clocks.`);
+    }
+    providers[provider] = {
+      source: 'live', complete: true, fetchedAt,
+      models: inventory.models.map(({ id }) => ({ id })),
+      voices: inventory.voices.map(({ id }) => ({ id })),
+    };
+  }
+  const audioInventory = { schema: 1, providers };
+  const bytes = new TextEncoder().encode(JSON.stringify({ workerId, kind: GATEWAY_KIND, audioInventory })).byteLength;
+  if (bytes > maxBytes) throw new Error(`Audio claim is ${bytes} bytes; Gateway allows ${maxBytes} bytes. Inventory was not truncated.`);
+  return audioInventory;
+}
 function baseAddress(value) {
   let url;
   try { url = new URL(value); } catch { throw new Error('Enter the Gateway server address.'); }
@@ -51,7 +78,7 @@ export function buildGatewayClient(baseUrl, token) {
       });
       if (idle && response.status === 204) return null;
       // Untrusted response bodies may contain echoed credentials.
-      if (!response.ok) throw new Error(`Gateway request failed (${response.status}).`);
+      if (!response.ok) throw Object.assign(new Error(`Gateway request failed (${response.status}).`), { status: response.status });
       let result;
       try { result = await response.json(); } catch { throw new Error('Gateway returned unreadable JSON.'); }
       if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Gateway returned an invalid response.');
@@ -65,9 +92,15 @@ export function buildGatewayClient(baseUrl, token) {
   }
   return {
     async health() { const raw = await request('/api/workers/health', { timeoutMs: 8000 }); return { ok: raw.ok === true, raw }; },
-    async claim(workerId) {
+    async claim(workerId, audioInventory) {
       if (typeof workerId !== 'string' || !workerId.trim() || workerId.length > 120) throw new Error('Worker ID must contain 1 to 120 characters.');
-      const envelope = await request('/api/workers/claim', { json: { workerId, kind: GATEWAY_KIND }, idle: true });
+      let envelope;
+      try {
+        envelope = await request('/api/workers/claim', { json: { workerId, kind: GATEWAY_KIND, ...(audioInventory === undefined ? {} : { audioInventory }) }, idle: true });
+      } catch (error) {
+        if ([413, 422].includes(error?.status)) error.claimRejected = true;
+        throw error;
+      }
       if (envelope === null) return null;
       if (typeof envelope.job?.jobId !== 'string' || !envelope.job.jobId.trim()) throw new Error('Gateway claim has no job ID.');
       return envelope.job;

@@ -16,7 +16,7 @@ import { sectionEligibility, storyStudioSection } from './lib/section-contracts.
 import { PROVIDERS, assertProviderSettingsSnapshot, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
 import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifact, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
 import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
-import { buildGatewayClient, GATEWAY_KIND, validateTtsJob, validateHealthResponse, gatewayBindingFingerprint } from './lib/gateway-client.js';
+import { buildGatewayClient, GATEWAY_KIND, prepareAudioInventory, validateTtsJob, validateHealthResponse, gatewayBindingFingerprint } from './lib/gateway-client.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -1214,14 +1214,17 @@ async function gatewayConnection(expectedBinding) {
   if (!validation.ok) throw new Error(validation.error);
   return { settings, creds, binding, client, health: health.raw };
 }
-async function mapGatewayJobToProduceShape(job) {
+async function mapGatewayJobToProduceShape(job, audioInventory) {
   const validation = validateTtsJob(job);
   if (!validation.ok) throw new Error(validation.error);
+  const offered = audioInventory.providers[job.provider];
+  if (!offered || !offered.models.some(({ id }) => id === job.model) || !offered.voices.some(({ id }) => id === job.voice)) throw new Error('Gateway returned audio outside the reported workspace inventory.');
   const p = PROVIDERS[job.provider];
   const { inventory } = await providerInventory(job.provider);
+  if (inventory.source !== 'live' || inventory.complete !== true) throw new Error('Live audio inventory is unavailable. Refresh the signed-in workspace.');
   const model = inventory.models.find((entry) => entry.id === job.model);
   if (!model || !inventory.voices.some((entry) => entry.id === job.voice)) throw new Error('Gateway model or voice was not discovered. Refresh the signed-in workspace.');
-  if (job.text.length > (model.maxChars || p.maxChars)) throw new Error(`Audio text exceeds the observed ${model.maxChars || p.maxChars} character limit.`);
+  if (job.text.length > (model.maxChars || p.maxChars)) throw new Error(`Audio text exceeds this worker's ${model.maxChars || p.maxChars} character limit.`);
   const tuning = job.providerSettings ?? {};
   if (!tuning || typeof tuning !== 'object' || Array.isArray(tuning)) throw new Error('Audio settings must be an object.');
   for (const [key, value] of Object.entries(tuning)) {
@@ -1278,12 +1281,17 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
     await waitForNextRun(null);
     if (await isPaused()) return { ok: true, paused: true };
     const connection = await gatewayConnection();
-    // The claim does not reveal its provider until acquired; avoid consuming work with no workspace open.
-    const tabs = await Promise.all(Object.values(PROVIDERS).map(findProviderTab));
-    if (!tabs.some(Boolean)) throw new Error('Open a signed-in audio workspace before taking Gateway work.');
+    const observations = {};
+    for (const provider of Object.keys(PROVIDERS)) {
+      try { observations[provider] = await providerInventory(provider); }
+      catch { /* Missing or failed discovery authorizes no work for this provider. */ }
+    }
+    const audioInventory = prepareAudioInventory(observations, connection.creds.workerId, connection.health);
     binding = connection.binding;
+    await gatewayConnection(binding); // Discovery must not dispatch with a changed mode or token.
+    if (await isPaused()) return { ok: true, paused: true };
     await setGatewayInFlight('', binding, 'claiming');
-    const job = await connection.client.claim(connection.creds.workerId);
+    const job = await connection.client.claim(connection.creds.workerId, audioInventory);
     if (!job) {
       await clearGatewayInFlight();
       await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true } });
@@ -1291,7 +1299,7 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
     }
     jobId = job.jobId;
     await setGatewayInFlight(jobId, binding, 'claimed');
-    const produceJob = await mapGatewayJobToProduceShape(job);
+    const produceJob = await mapGatewayJobToProduceShape(job, audioInventory);
     await connection.client.progress(jobId, 'generating', 'Preparing the queued audio.');
     await gatewayConnection(binding); // A mode/token change during inventory must stop dispatch.
     await armHumanDelay(connection.settings);
@@ -1305,6 +1313,7 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
     return { ok: true };
   } catch (error) {
     const ambiguous = attempted && error?.ambiguous !== false;
+    if (!jobId && error?.claimRejected) await clearGatewayInFlight();
     if (jobId && binding) {
       try {
         const staged = await getAudioArtifact(caches, artifactDescriptor(`gateway:${jobId}`));
