@@ -15,7 +15,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'fish:generate') {
     bridge.callMain('generate', { text: msg.text, model: msg.voice, backend: msg.backend, speed: msg.speed, autoTag: msg.autoTag })
       .then((r) => sendResponse({ ok: true, ...r }))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous }));
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous, verificationRequired: !!e.verificationRequired }));
     return true;
   }
   if (msg?.type === 'fish:inventory') {

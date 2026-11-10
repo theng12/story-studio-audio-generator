@@ -47,7 +47,7 @@ export function workKindForQueueItem(item) {
 }
 
 export function retryQueueItem(item) {
-  if (!item || item.status !== 'failed' || item.ambiguous || item.requiresLocalReview) return null;
+  if (!item || item.status !== 'failed' || item.ambiguous || item.requiresLocalReview || item.verificationRequired) return null;
   const next = { ...item, status: 'pending', attempts: 0 };
   delete next.error;
   delete next.startedAt;

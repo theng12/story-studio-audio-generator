@@ -77,22 +77,13 @@ test('marks a discovered inventory as live and repairs a stale selected model', 
   });
 });
 
-test('normalizes only recognized visible Story Studio Audio Generator model labels into backend ids', () => {
-  const models = normalizeFishTtsModels([
-    'Fish Audio S2.1 Pro Free Newest',
-    'Fish Audio S2 Pro Legacy',
-    'Fish Audio S1 Legacy',
-    'Fish Audio S3',
-    'Fish Audio S3 Pro',
-    'Unrelated page control',
-  ]);
-
-  assert.deepEqual(models, [
-    { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro Free Newest' },
-    { id: 's2-pro', label: 'Fish Audio S2 Pro Legacy' },
-    { id: 's1', label: 'Fish Audio S1 Legacy' },
-    { id: 's3', label: 'Fish Audio S3' },
-    { id: 's3-pro', label: 'Fish Audio S3 Pro' },
+test('Fish listing preserves exact metadata IDs and never derives an ID or support from a label', () => {
+  assert.deepEqual(normalizeFishTtsModels([
+    { id: 'drama-3', label: 'Drama3' }, { id: 'future-exact-id', label: 'Future model' }, 'S2.1Pro',
+  ]), [
+    { id: 'drama-3', label: 'Drama3', generationSupported: false },
+    { id: 'future-exact-id', label: 'Future model', generationSupported: false },
+    { id: '', label: 'S2.1Pro', generationSupported: false },
   ]);
 });
 
@@ -101,7 +92,8 @@ test('marks a partial Fish model collection as non-authoritative discovery', () 
 
   assert.equal(inventory.source, 'discovered');
   assert.equal(inventory.complete, false);
-  assert.deepEqual(inventory.models, [{ id: 's3-pro', label: 'Fish Audio S3 Pro' }]);
+  assert.deepEqual(inventory.models, [{ id: '', label: 'Fish Audio S3 Pro', generationSupported: false }]);
+  assert.equal(inventory.verificationRequired, true);
 });
 
 test('keeps a saved model visible for non-authoritative discovery and snapshots the displayed Fish model', () => {
@@ -143,31 +135,6 @@ test('omits unsupported ElevenLabs controls and syncs changed live metadata', ()
   assert.equal(modelMetaNeedsSync(model, model), false);
 });
 
-test('Fish inventory marks only enumerable native select options complete', () => {
-  const source = readFileSync(new URL('../src/content/fish-main.js', import.meta.url), 'utf8');
-
-  assert.match(source, /openFishModelCombobox/);
-  assert.match(source, /closeFishModelCombobox/);
-  assert.match(source, /stableRounds/);
-  assert.match(source, /control\.tagName === 'SELECT' && labels\.length > 0/);
-  assert.match(source, /return \{ labels, complete \}/);
-});
-
-test('Fish combobox discovery uses visible Fish options as menu state without selection-moving keys', () => {
-  const source = readFileSync(new URL('../src/content/fish-main.js', import.meta.url), 'utf8');
-
-  assert.match(source, /function fishModelOptionsVisible\(control\)/);
-  assert.match(source, /function fishModelMenuOpen\(control\)/);
-  assert.match(source, /return fishModelComboboxOpen\(control\) \|\| fishModelOptionsVisible\(control\);/);
-  assert.match(source, /return labels\.filter\(isFishModelLabel\);/);
-  assert.match(source, /dispatchFishModelPointerDown\(control\)/);
-  assert.match(source, /dispatchFishModelKey\(control, 'Enter'\)/);
-  assert.match(source, /dispatchFishModelKey\(control, 'Escape'\)/);
-  assert.match(source, /new KeyboardEvent\('keyup'/);
-  assert.doesNotMatch(source, /ArrowDown/);
-  assert.doesNotMatch(source, /\boption\.click\(/);
-});
-
 test('ElevenLabs generation does not cap discovered model limits at 5000 characters', () => {
   const source = readFileSync(new URL('../src/content/eleven-main.js', import.meta.url), 'utf8');
 
@@ -180,11 +147,12 @@ test('uses the Fish fallback only when its visible Model control cannot be read'
 
   assert.equal(fallback.source, 'fallback');
   assert.deepEqual(FISH_FALLBACK_MODELS, [
-    { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro - Free, newest' },
+    { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro (saved default)' },
     { id: 's2-pro', label: 'Fish Audio S2 Pro - Legacy' },
     { id: 's1', label: 'Fish Audio S1 - Legacy' },
   ]);
-  assert.deepEqual(fallback.models, FISH_FALLBACK_MODELS);
+  assert.deepEqual(fallback.models, FISH_FALLBACK_MODELS.map((model) => ({ ...model, generationSupported: false })));
+  assert.equal(fallback.generationAvailable, false);
   assert.deepEqual(fallback.voices, [{ id: 'voice-1', title: 'Narrator' }]);
 });
 
@@ -194,7 +162,7 @@ test('provider bridges preserve ambiguous MAIN-world generation failures', () =>
     const main = readFileSync(new URL(`../src/content/${name}-main.js`, import.meta.url), 'utf8');
     assert.match(bridge, /ambiguous: !!data\.ambiguous/);
     assert.match(main, /createMainBridge/);
-    assert.match(main, /ambiguous: true/);
+    assert.match(main, name === 'fish' ? /verificationRequired: true, ambiguous: false/ : /ambiguous: true/);
   }
 });
 
@@ -204,8 +172,8 @@ test('ElevenLabs makes partial multi-chunk generations ambiguous before quota ha
   assert.match(source, /catch \(error\) \{[\s\S]{0,180}ambiguous: true/);
 });
 
-test('provider 5xx and timeout responses are ambiguous while normal 4xx remain retryable', () => {
-  for (const name of ['fish', 'eleven']) {
+test('ElevenLabs 5xx and timeout responses are ambiguous while normal 4xx remain retryable', () => {
+  for (const name of ['eleven']) {
     const source = readFileSync(new URL(`../src/content/${name}-main.js`, import.meta.url), 'utf8');
     assert.match(source, /r\.status === 408 \|\| r\.status >= 500/);
   }

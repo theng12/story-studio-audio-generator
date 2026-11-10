@@ -1,58 +1,47 @@
-// MAIN-world script injected into fish.audio.
-//
-// Why MAIN world: `api.fish.audio` only accepts the generate/voices calls from
-// the fish.audio page origin. Running here makes our fetches indistinguishable
-// from Fish's own app code (same origin, same `localStorage.token`), so they're
-// accepted. This script owns the Fish API calls; the isolated `fish.js` bridges
-// it to the extension via window.postMessage (this world has no chrome.* APIs).
-//
-// Everything here was verified live against the logged-in studio:
-//   - Auth:   Authorization: Bearer <localStorage.token>
-//   - Voices: GET  https://api.fish.audio/model?self=true
-//   - TTS:    POST https://api.fish.audio/task  (stream:true)
-//             → returns the MP3 bytes directly (application/octet-stream).
-
+// MAIN-world discovery uses the signed-in workspace. Listing is not generation authority.
 (() => {
   const API = 'https://api.fish.audio';
   const REQ = 'FISHEXT_REQ';
   const RES = 'FISHEXT_RES';
-
   const token = () => localStorage.getItem('token') || '';
-
-  // NOTE: Fish's web app sends a reCAPTCHA token on every generate, but the
-  // /task API does NOT enforce it for an authenticated (Bearer-token) request
-  // — verified live: a correct body with no recaptcha field returns the MP3
-  // with status 200. So we don't mint one; the localStorage token is enough.
-
-  // Auto-tag: Fish's "Auto Tag All" — inserts [emphasis]/[soft]/[pause]/…
-  // tags so the S2 model reads more expressively. Verified live:
-  //   POST /enhance/text { payload: { text } } -> { enhanced_script }
-  async function enhance(text) {
-    const r = await fetch(`${API}/enhance/text`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload: { text } }),
-    });
-    if (!r.ok) throw new Error(`Auto-tag failed (${r.status}).`);
-    const j = await r.json();
-    return j.enhanced_script || text;
-  }
+  const visible = (element) => !!element.getClientRects?.().length;
 
   async function inventory() {
-    const r = await fetch(`${API}/model?self=true&page_size=50`, {
-      headers: { Authorization: `Bearer ${token()}` },
-    });
+    const headers = { Authorization: `Bearer ${token()}` };
+    const r = await fetch(`${API}/model?self=true&page_size=50`, { headers });
     if (!r.ok) throw new Error(`Voice list failed (${r.status}).`);
     const j = await r.json();
-    const arr = Array.isArray(j) ? j : j.items || [];
-    const voices = arr.map((v) => ({ id: v._id, title: v.title }));
-    return { voices, fishModelOptions: await collectFishModelOptions() };
+    const owned = Array.isArray(j) ? j : j.items || [];
+    const voices = new Map(owned.filter((v) => typeof v?._id === 'string' && v._id).map((v) => [v._id, { id: v._id, title: v.title, source: 'owned-list' }]));
+    // Public voices visible in the workspace need not belong to the signed-in account.
+    const visibleIds = new Set();
+    for (const image of document.querySelectorAll('img[src]')) {
+      if (!visible(image)) continue;
+      try {
+        const url = new URL(image.currentSrc || image.src);
+        if (url.protocol !== 'https:' || url.hostname !== 'public-platform.r2.fish.audio') continue;
+        const match = url.pathname.match(/\/coverimage\/([a-f0-9]{32})(?:\/|$)/i);
+        if (match) visibleIds.add(match[1]);
+      } catch { /* An image is not a voice record. */ }
+    }
+    for (const id of visibleIds) {
+      if (voices.has(id)) continue;
+      try {
+        const response = await fetch(`${API}/model/${encodeURIComponent(id)}`, { headers });
+        if (!response.ok) continue;
+        const voice = await response.json();
+        if (voice?._id === id && typeof voice.title === 'string') voices.set(id, { id, title: voice.title, source: 'visible-detail' });
+      } catch { /* Preserve known voices if a public detail cannot be read. */ }
+    }
+    return {
+      voices: [...voices.values()], voiceScope: 'owned-and-visible', voicesComplete: false,
+      fishModelOptions: await collectFishModelOptions(),
+      verificationRequired: true,
+    };
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
   function fishModelControl() {
-    const visible = (element) => !!element?.getClientRects?.().length;
     for (const control of document.querySelectorAll('select, [role="combobox"]')) {
       if (!visible(control)) continue;
       const context = `${control.getAttribute('aria-label') || ''} ${control.labels?.[0]?.textContent || ''} ${control.parentElement?.textContent || ''}`;
@@ -60,180 +49,62 @@
     }
     return null;
   }
-
-  function isFishModelLabel(label) {
-    return /Fish Audio S\d/i.test(label);
+  function renderedFishModels(control) {
+    const options = control.tagName === 'SELECT'
+      ? [...control.options]
+      : [...document.querySelectorAll('[role="option"]')].filter(visible);
+    return options.map((option) => ({
+      id: (control.tagName === 'SELECT' ? option.value : option.getAttribute('data-model-id')) || '',
+      label: (option.textContent || '').replace(/\s+/g, ' ').trim(),
+      source: 'workspace-option',
+    })).filter((row) => row.label);
   }
-
-  function renderedFishModelLabels(control) {
-    const labels = control.tagName === 'SELECT'
-      ? [...control.options].map((option) => option.textContent || '')
-      : [...document.querySelectorAll('[role="option"]')]
-        .filter((element) => !!element.getClientRects?.().length)
-        .map((option) => option.textContent || '');
-    return labels.filter(isFishModelLabel);
+  const menuOpen = (control) => control.getAttribute('aria-expanded') === 'true' || (control.tagName !== 'SELECT' && renderedFishModels(control).length > 0);
+  function key(control, value) {
+    control.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }));
+    control.dispatchEvent(new KeyboardEvent('keyup', { key: value, bubbles: true, cancelable: true }));
   }
-
-  function fishModelOptionsVisible(control) {
-    return control.tagName !== 'SELECT' && renderedFishModelLabels(control).length > 0;
-  }
-
-  function fishModelComboboxOpen(control) {
-    return control.getAttribute('aria-expanded') === 'true';
-  }
-
-  function fishModelMenuOpen(control) {
-    return fishModelComboboxOpen(control) || fishModelOptionsVisible(control);
-  }
-
-  function dispatchFishModelPointerDown(control) {
-    const PointerDown = window.PointerEvent || MouseEvent;
-    control.dispatchEvent(new PointerDown('pointerdown', {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      buttons: 1,
-      pointerType: 'mouse',
-    }));
-  }
-
-  function dispatchFishModelKey(control, key) {
-    control.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
-    control.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
-  }
-
-  async function openFishModelCombobox(control) {
-    const wasOpen = fishModelMenuOpen(control);
-    const opened = control.tagName !== 'SELECT' && !wasOpen;
-    if (opened) {
-      control.focus();
-      control.click();
-      await sleep(50);
-      if (!fishModelMenuOpen(control)) {
-        dispatchFishModelPointerDown(control);
-        await sleep(50);
-      }
-      if (!fishModelMenuOpen(control)) {
-        dispatchFishModelKey(control, 'Enter');
-        await sleep(50);
-      }
-    }
-    let previous = '';
-    let stableRounds = 0;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const labels = renderedFishModelLabels(control);
-      const signature = labels.join('\n');
-      stableRounds = labels.length && signature === previous ? stableRounds + 1 : 0;
-      if (stableRounds >= 2) return { labels, opened };
-      previous = signature;
-      await sleep(50);
-    }
-    return { labels: [], opened };
-  }
-
-  async function closeFishModelCombobox(control, opened) {
-    if (!opened) return;
-    if (control.tagName === 'SELECT') control.blur();
-    else if (fishModelMenuOpen(control)) {
-      control.focus();
-      dispatchFishModelKey(control, 'Escape');
-    }
-    await sleep(50);
-  }
-
-  // Opening only exposes options; it never selects one. A current combobox
-  // label alone is intentionally not accepted as a complete model inventory.
   async function collectFishModelOptions() {
     const control = fishModelControl();
-    if (!control) return { labels: [], complete: false };
-    const { labels, opened } = await openFishModelCombobox(control);
-    await closeFishModelCombobox(control, opened);
-    const complete = control.tagName === 'SELECT' && labels.length > 0;
-    return { labels, complete };
-  }
-
-  // Returns { base64, mime } for the generated audio.
-  async function generate({ text, model, backend, speed = 1, volume = 0, format = 'mp3', autoTag = false }) {
-    if (!text || !text.trim()) throw new Error('No text to speak.');
-    if (!model) throw new Error('No voice (model_id) selected.');
-    if (autoTag) text = await enhance(text);
-    // The studio caps a single generation at 15k characters. Chunking +
-    // stitching multiple chapters is a follow-up; for now fail loudly.
-    if (text.length > 15000) {
-      throw new Error(`Text is ${text.length} chars; fish.audio caps one generation at 15000. Split this chapter.`);
-    }
-    const prosody = { speed, volume, normalize_loudness: true };
-    const body = {
-      type: 'tts',
-      stream: true,
-      model,
-      prosody,
-      latency: 'balanced',
-      parameters: {
-        text,
-        model_id: model,
-        format,
-        prosody,
-        latency: 'balanced',
-        backend: backend || 's2.1-pro',
-        sampler: { temperature: 1, top_p: 0.9 },
-        normalize: false,
-      },
-    };
-    let r;
+    if (!control) return { models: [], complete: false };
+    const opened = control.tagName !== 'SELECT' && !menuOpen(control);
     try {
-      r = await fetch(`${API}/task`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } catch (error) {
-      throw Object.assign(error, { ambiguous: true });
-    }
-    if (!r.ok) {
-      const bodyText = await r.text().catch(() => '');
-      let msg = `Generation failed (${r.status}).`;
-      try {
-        const j = JSON.parse(bodyText);
-        if (j?.message) msg = j.message;
-      } catch {
-        /* binary/empty/non-JSON body */
+      if (opened) {
+        control.focus(); control.click(); await sleep(50);
+        if (!menuOpen(control)) {
+          const PointerDown = window.PointerEvent || MouseEvent;
+          control.dispatchEvent(new PointerDown('pointerdown', { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerType: 'mouse' }));
+          await sleep(50);
+        }
+        if (!menuOpen(control)) { key(control, 'Enter'); await sleep(50); }
       }
-      // A credit/balance/rate-limit failure — surfaced as .limit so the queue
-      // can pause or auto-resume instead of burning through every remaining item.
-      const limit =
-        r.status === 402 ||
-        r.status === 429 ||
-        /insufficient|balance|credit|quota|too many requests|rate.?limit/i.test(`${msg} ${bodyText}`);
-      throw Object.assign(new Error(msg), { limit, ambiguous: r.status === 408 || r.status >= 500 });
-    }
-    let buf;
-    try {
-      buf = await r.arrayBuffer();
-    } catch (error) {
-      throw Object.assign(error, { ambiguous: true });
-    }
-    if (!buf.byteLength) throw Object.assign(new Error('Empty audio returned.'), { ambiguous: true });
-    try {
-      return { base64: bufToBase64(buf), mime: format === 'wav' ? 'audio/wav' : 'audio/mpeg' };
-    } catch (error) {
-      throw Object.assign(error, { ambiguous: true });
+      let previous = '', stableRounds = 0;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const models = renderedFishModels(control);
+        const signature = JSON.stringify(models);
+        stableRounds = models.length && signature === previous ? stableRounds + 1 : 0;
+        if (stableRounds >= 2) {
+          const text = [...document.querySelectorAll('textarea[maxlength]')].find(visible);
+          const maxChars = Number(text?.getAttribute('maxlength'));
+          const selectedId = control.tagName === 'SELECT' ? control.value : control.getAttribute('data-model-id');
+          return {
+            models, complete: control.tagName === 'SELECT' && models.every((row) => row.id),
+            selectedId: selectedId || '',
+            ...(Number.isSafeInteger(maxChars) && maxChars > 0 ? { maxChars, limitSource: 'workspace-textarea' } : {}),
+          };
+        }
+        previous = signature; await sleep(50);
+      }
+      return { models: [], complete: false };
+    } finally {
+      // Exposing options must not change the selected model or other workspace controls.
+      if (opened && menuOpen(control)) { control.focus(); key(control, 'Escape'); await sleep(50); }
     }
   }
 
-  function bufToBase64(buf) {
-    const bytes = new Uint8Array(buf);
-    let bin = '';
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-    }
-    return btoa(bin);
+  async function generate() {
+    // shortcut: normal verification inputs are not yet captured; restore submission only with that contract.
+    throw Object.assign(new Error('Fish workspace verification is required. Generation is unavailable until its normal verification flow is supported. No request was submitted.'), { verificationRequired: true, ambiguous: false });
   }
-
-  window.__STORY_STUDIO_BRIDGE__.createMainBridge({
-    requestKind: REQ,
-    responseKind: RES,
-    handlers: { inventory, generate },
-  });
+  window.__STORY_STUDIO_BRIDGE__.createMainBridge({ requestKind: REQ, responseKind: RES, handlers: { inventory, generate } });
 })();

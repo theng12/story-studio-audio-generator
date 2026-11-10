@@ -3,8 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as pause } from 'node:timers/promises';
+import { artifactDescriptor, putAudioArtifact } from '../src/lib/audio-artifacts.js';
 const AUDIO = Buffer.from('RIFF exact fixture audio bytes');
-const JOB = { jobId: 'audio/a', kind: 'audio', provider: 'fish', voice: 'v1', text: 'Hello.', model: 's2.1-pro', speed: 1.2 };
+const MODEL = ['eleven', 'multilingual', 'v2'].join('_');
+const JOB = { jobId: 'audio/a', kind: 'audio', provider: 'elevenlabs_web', voice: 'v1', text: 'Hello.', model: MODEL, speed: 1.2 };
 const clone = (value) => value === undefined ? value : structuredClone(value);
 function area(state) {
   return {
@@ -25,7 +27,7 @@ function cacheStorage() {
 async function waitFor(predicate) { for (let n = 0; n < 400; n++) { if (predicate()) return; await pause(5); } throw new Error('Actual audio background fixture timed out.'); }
 async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled = true, autoStart = false, job = JOB, answers = [{ ok: true }], onGenerate, onSave, onInventory, inventoryReply, inventoryMaxAgeSeconds = 90, inventoryMaxBytes = 1048576, claimStatus, providerFailure, providerReply, tabs = [{ id: 7, status: 'complete' }], failAnswer = { ok: true }, lostClaim = false, uploadLimit = 1024, voices = [{ id: 'v1', name: 'Fixture voice' }] } = {}) {
   local ||= { gatewaySettings: { gatewayModeEnabled: enabled, gatewayBaseUrl: 'http://gateway.invalid' }, gatewayWorkerToken: 'fixture-only', gatewayWorkerId: 'fixture-audio' };
-  const sync = { settings: { mode, maxRetries: 0, humanDelayMinSec: 0, humanDelayMaxSec: 0, providerSettings: { fish: { model: 'wrong-local-model', speed: 1.9 } } } };
+  const sync = { settings: { mode, maxRetries: 0, humanDelayMinSec: 0, humanDelayMaxSec: 0, providerSettings: { elevenlabs_web: { model: 'wrong-local-model', speed: 1.1 } } } };
   const savedEnabled = local.gatewaySettings.gatewayModeEnabled;
   if (!autoStart) local.gatewaySettings.gatewayModeEnabled = false;
   const previous = Object.fromEntries(['chrome', 'fetch', 'caches'].map((key) => [key, globalThis[key]]));
@@ -44,11 +46,12 @@ async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled =
       query: async () => tabs,
       async sendMessage(id, message) {
         provider.push(clone(message));
-        if (message.type === 'fish:inventory') {
+        if (message.type === 'fish:inventory') return { ok: true, raw: { fishModelOptions: { models: [{ id: 'drama-3', label: 'Drama3' }], complete: true }, voices } };
+        if (message.type === 'eleven:inventory') {
           await onInventory?.(local);
-          return inventoryReply || { ok: true, raw: { fishModelOptions: { labels: ['Fish Audio S2.1 Pro'], complete: true }, voices } };
+          return inventoryReply || { ok: true, raw: { modelsPayload: { models: [{ model_id: MODEL, name: 'Multilingual v2', can_do_text_to_speech: true, maximum_text_length_per_request: 15000 }] }, voices } };
         }
-        if (message.type === 'fish:generate') {
+        if (message.type === 'eleven:generate') {
           await onGenerate?.(local);
           if (providerFailure) throw new Error('Fixture provider outcome unknown.');
           return providerReply || { ok: true, base64: AUDIO.toString('base64'), mime: 'audio/wav' };
@@ -95,9 +98,9 @@ test('real claim/inventory/generation/upload returns exact bytes with authoritat
     worker.tick(); worker.tick();
     await waitFor(() => worker.local.gatewayStatus?.lastJob === JOB.jobId);
     await worker.settled();
-    const generation = worker.provider.filter((entry) => entry.type === 'fish:generate');
+    const generation = worker.provider.filter((entry) => entry.type === 'eleven:generate');
     assert.equal(generation.length, 1);
-    assert.equal(generation[0].backend, JOB.model);
+    assert.equal(generation[0].model, JOB.model);
     assert.equal(generation[0].voice, JOB.voice);
     assert.equal(generation[0].speed, JOB.speed);
     assert.deepEqual(worker.calls.find((entry) => entry.url.endsWith('/result')).bytes, AUDIO);
@@ -134,9 +137,9 @@ test('workspace loss replaces the earlier snapshot with empty eligibility on the
     worker.tick(); await worker.settled();
     const claims = worker.calls.filter((entry) => entry.url.endsWith('/claim'));
     assert.equal(claims.length, 2);
-    assert.ok(JSON.parse(claims[0].init.body).audioInventory.providers.fish);
+    assert.ok(JSON.parse(claims[0].init.body).audioInventory.providers.elevenlabs_web);
     assert.deepEqual(JSON.parse(claims[1].init.body).audioInventory.providers, {});
-    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
   } finally { worker.restore(); }
 });
 
@@ -148,7 +151,7 @@ test('claim carries fresh IDs only, then rechecks provider inventory before subm
     const before = Date.now();
     worker.tick(); await waitFor(() => worker.local.gatewayStatus?.error); await worker.settled();
     const claim = worker.calls.find((entry) => entry.url.endsWith('/claim'));
-    const snapshot = JSON.parse(claim.init.body).audioInventory.providers.fish;
+    const snapshot = JSON.parse(claim.init.body).audioInventory.providers.elevenlabs_web;
     assert.deepEqual(snapshot.models, [{ id: JOB.model }]);
     assert.deepEqual(snapshot.voices, [{ id: JOB.voice }]);
     assert.equal(snapshot.source, 'live');
@@ -156,7 +159,7 @@ test('claim carries fresh IDs only, then rechecks provider inventory before subm
     assert(snapshot.fetchedAt >= before && snapshot.fetchedAt <= Date.now());
     assert.equal(claim.init.body.includes('Private account voice'), false);
     assert.equal(claim.init.body.includes('maxChars'), false);
-    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
     assert.equal(JSON.parse(worker.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, false);
     assert.equal(worker.local.gatewayStatus.held, false);
   } finally { worker.restore(); }
@@ -168,23 +171,23 @@ test('worker character limit is enforced before submit without calling registry 
     worker.tick(); await waitFor(() => worker.local.gatewayStatus?.error); await worker.settled();
     assert.match(worker.local.gatewayStatus.error, /this worker's 15000 character limit/);
     assert.equal(worker.local.gatewayStatus.error.includes('observed'), false);
-    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
     assert.equal(JSON.parse(worker.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, false);
   } finally { worker.restore(); }
 });
 
 for (const options of [
-  { inventoryReply: { ok: true, raw: { fishModelOptions: { labels: [], complete: true }, voices: [{ id: 'v1' }] } } },
-  { inventoryReply: { ok: true, raw: { fishModelOptions: { labels: ['Fish Audio S2.1 Pro'], complete: false }, voices: [{ id: 'v1' }] } } },
+  { inventoryReply: { ok: true, raw: { modelsPayload: { models: [] }, voices: [{ id: 'v1' }] } } },
+  { voices: [] },
   { inventoryReply: { ok: false, error: 'Fixture inventory unavailable.' } },
 ]) {
-  test('fallback, incomplete or failed discovery publishes no eligible provider', async () => {
+  test('fallback, empty voices or failed discovery publishes no eligible provider', async () => {
     const worker = await boot(options);
     try {
       worker.tick(); await waitFor(() => worker.local.gatewayStatus?.idle); await worker.settled();
       const claim = worker.calls.find((entry) => entry.url.endsWith('/claim'));
       assert.deepEqual(JSON.parse(claim.init.body).audioInventory.providers, {});
-      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+      assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
     } finally { worker.restore(); }
   });
 }
@@ -216,7 +219,7 @@ for (const status of [413, 422, 500]) {
     try {
       worker.tick(); await waitFor(() => worker.local.gatewayStatus?.error); await worker.settled();
       assert.equal(worker.local.gatewayStatus.held, status === 500);
-      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+      assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
     } finally { worker.restore(); }
   });
 }
@@ -235,7 +238,7 @@ for (const code of [402, 429]) {
       assert.equal(worker.local.queuePaused, true);
       worker.tick(); await worker.settled();
       assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
-      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+      assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
     } finally { worker.restore(); }
   });
 }
@@ -247,7 +250,7 @@ test('unacknowledged explicit provider rejection remains held without another cl
     assert.equal(worker.local.gatewayInFlightPhase, 'generating');
     worker.tick(); await worker.settled();
     assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
-    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
   } finally { worker.restore(); }
 });
 
@@ -294,7 +297,7 @@ test('unknown generation and lost claim remain held without replay after restart
     failed.tick(); await waitFor(() => failed.local.gatewayStatus?.held); await failed.settled();
     assert.equal(JSON.parse(failed.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, true);
     await failed.send({ type: 'resumeQueue' }); failed.tick(); await failed.settled();
-    assert.equal(failed.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+    assert.equal(failed.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
     local = failed.local; cache = failed.cache;
   } finally { failed.restore(); }
   const restarted = await boot({ local, cache, autoStart: true });
@@ -304,7 +307,7 @@ test('unknown generation and lost claim remain held without replay after restart
   try {
     lost.tick(); await waitFor(() => lost.local.gatewayStatus?.held); lost.tick(); await lost.settled();
     assert.equal(lost.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
-    assert.equal(lost.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+    assert.equal(lost.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
   } finally { lost.restore(); }
 });
 
@@ -321,7 +324,7 @@ test('wrong mode/disabled never claims; missing model/voice and unknown live voi
     const worker = await boot({ job });
     try {
       worker.tick(); await waitFor(() => worker.local.gatewayStatus?.error); await worker.settled();
-      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 0);
+      assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
       assert.equal(JSON.parse(worker.calls.find((entry) => entry.url.endsWith('/fail')).init.body).ambiguous, false);
     } finally { worker.restore(); }
   }
@@ -333,8 +336,8 @@ for (const mode of ['studio', 'standalone']) {
     const worker = await boot({ mode, onSave(payload) { saves.push(payload); if (saves.length === 1) throw new Error('Fixture save unavailable.'); } });
     try {
       const item = {
-        id: 'local-save', text: 'Local fixture narration.', label: 'Fixture', provider: 'fish', voice: 'v1',
-        providerSettings: { model: 's2.1-pro', speed: 1, modelMeta: { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro' } },
+        id: 'local-save', text: 'Local fixture narration.', label: 'Fixture', provider: 'elevenlabs_web', voice: 'v1',
+        providerSettings: { model: MODEL, speed: 1, modelMeta: { id: MODEL, label: 'Multilingual v2' } },
         ...(mode === 'studio'
           ? { kind: 'script', slug: 'fixture', episodeCode: 'E01', sectionSlug: 'Script', chapterNumber: null }
           : { kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/fixture.mp3' }),
@@ -347,7 +350,7 @@ for (const mode of ['studio', 'standalone']) {
       assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
       await waitFor(() => worker.local.queue?.[0]?.status === 'done');
       await worker.settled();
-      assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+      assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
       assert.equal(saves.length, 2);
       if (mode === 'studio') assert.deepEqual(Buffer.from(saves[1].audioBase64, 'base64'), AUDIO);
       else {
@@ -361,16 +364,88 @@ for (const mode of ['studio', 'standalone']) {
   });
 }
 
+test('Fish verification pauses fresh work without submission, automatic retry or retryFailed replay', async () => {
+  const worker = await boot({ mode: 'standalone' });
+  try {
+    worker.sync.settings.maxRetries = 4;
+    const item = {
+      id: 'fish-verification', kind: 'paste', target: 'download', text: 'Do not submit.', label: 'Verification fixture',
+      provider: 'fish', voice: 'v1', sceneDuration: 8,
+      providerSettings: { model: 'drama-3', modelMeta: { id: 'drama-3', label: 'Drama3' }, speed: 1.1, sceneDuration: 8 },
+    };
+    assert.equal((await worker.send({ type: 'enqueue', items: [item, { ...item, id: 'later', text: 'Later narration.' }] })).added, 2);
+    await waitFor(() => worker.local.queuePaused === true);
+    await worker.settled();
+    const failed = worker.local.queue[0];
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.verificationRequired, true);
+    assert.equal(!!failed.ambiguous, false);
+    assert.equal(failed.phase, undefined);
+    assert.equal(failed.attempts, undefined);
+    assert.equal(worker.local.queue[1].status, 'pending');
+    assert.deepEqual(failed.providerSettings, item.providerSettings);
+    assert.equal(failed.sceneDuration, 8);
+    assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 0);
+    assert.equal((await worker.send({ type: 'retryFailed' })).retried, 0);
+    worker.tick(); await worker.settled();
+    assert.equal(worker.provider.length, 0);
+    assert.equal(worker.calls.length, 0);
+    assert.equal(worker.cache.rows.size, 0);
+  } finally { worker.restore(); }
+});
+
+for (const mode of ['studio', 'standalone']) {
+  test(`${mode} saves retained Fish bytes while new Fish generation is unavailable`, async () => {
+    const cache = cacheStorage();
+    const artifact = await putAudioArtifact(cache, artifactDescriptor('fish-retained', 'audio/wav'), { base64: AUDIO.toString('base64'), mime: 'audio/wav' });
+    const item = {
+      id: 'fish-retained', status: 'failed', phase: 'saving', artifact,
+      text: 'Do not regenerate.', label: 'Retained Fish', provider: 'fish', voice: 'v1',
+      providerSettings: { model: 'saved-model', modelMeta: { id: 'saved-model', label: 'Saved model' }, sceneDuration: 8 },
+      ...(mode === 'studio'
+        ? { kind: 'script', slug: 'fixture', episodeCode: 'E01', sectionSlug: 'Script', chapterNumber: null }
+        : { kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/retained.wav' }),
+    };
+    const saves = [];
+    const local = { gatewaySettings: { gatewayModeEnabled: false }, queue: [item] };
+    const worker = await boot({ mode, local, cache, onSave: (payload) => saves.push(payload) });
+    try {
+      assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
+      await waitFor(() => worker.local.queue[0].status === 'done');
+      await worker.settled();
+      assert.equal(saves.length, 1);
+      const savedBytes = mode === 'studio' ? saves[0].audioBase64 : saves[0].url.split(',')[1];
+      assert.deepEqual(Buffer.from(savedBytes, 'base64'), AUDIO);
+      assert.deepEqual(worker.local.queue[0].providerSettings, item.providerSettings);
+      assert.equal(worker.provider.length, 0);
+      assert.equal(worker.calls.length, 0);
+      assert.equal(worker.cache.rows.size, 0);
+    } finally { worker.restore(); }
+  });
+}
+
+test('listed Fish models cannot authorize a Gateway claim while verification is unavailable', async () => {
+  const worker = await boot({ inventoryReply: { ok: false, error: 'Other provider unavailable.' } });
+  try {
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.idle); await worker.settled();
+    assert(worker.provider.some((message) => message.type === 'fish:inventory'));
+    const claim = worker.calls.find((entry) => entry.url.endsWith('/claim'));
+    assert.deepEqual(JSON.parse(claim.init.body).audioInventory.providers, {});
+    assert.equal(worker.provider.some((message) => message.type.endsWith(':generate')), false);
+    assert.equal(worker.local.gatewayInFlightPhase, undefined);
+  } finally { worker.restore(); }
+});
+
 test('upload limit retains output; lock prevents local enqueue from generating concurrently', async () => {
   let release;
   const barrier = new Promise((resolve) => { release = resolve; });
   const worker = await boot({ uploadLimit: 1, onGenerate: () => barrier });
   try {
-    worker.tick(); await waitFor(() => worker.provider.some((entry) => entry.type === 'fish:generate'));
+    worker.tick(); await waitFor(() => worker.provider.some((entry) => entry.type === 'eleven:generate'));
     const enqueued = await worker.send({ type: 'enqueue', items: [{ id: 'local', kind: 'paste', target: 'download', text: 'local', label: 'local' }] });
     assert.equal(enqueued.added, 1);
     worker.tick(); await worker.settled();
-    assert.equal(worker.provider.filter((entry) => entry.type === 'fish:generate').length, 1);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
     release();
     await waitFor(() => worker.local.gatewayStatus?.held); await worker.settled();
     assert.equal(worker.cache.rows.size, 1);

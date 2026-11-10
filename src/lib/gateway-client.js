@@ -36,7 +36,7 @@ export function prepareAudioInventory(observations, workerId, health, now = Date
   for (const provider of TTS_JOB_SCHEMA.knownProviders) {
     const response = observations[provider];
     const inventory = response?.inventory;
-    if (response?.ok !== true || inventory?.source !== 'live' || inventory.complete !== true) continue;
+    if (response?.ok !== true || inventory?.source !== 'live' || inventory.complete !== true || inventory.generationAvailable === false || inventory.verificationRequired === true) continue;
     if (![inventory.models, inventory.voices].every((rows) => Array.isArray(rows) && rows.length && rows.every((row) => typeof row?.id === 'string' && row.id.trim()))) continue;
     const fetchedAt = inventory.fetchedAt;
     if (!Number.isSafeInteger(fetchedAt) || fetchedAt <= 0 || fetchedAt > now || now - fetchedAt >= maxAgeSeconds * 1000) {

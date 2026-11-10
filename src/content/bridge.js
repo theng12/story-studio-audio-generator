@@ -39,7 +39,7 @@
       clearTimeout(entry.timeout);
       data.ok
         ? entry.resolve(data.result)
-        : entry.reject(Object.assign(new Error(data.error || 'main-world error'), { limit: !!data.limit, ambiguous: !!data.ambiguous }));
+        : entry.reject(Object.assign(new Error(data.error || 'main-world error'), { limit: !!data.limit, ambiguous: !!data.ambiguous, verificationRequired: !!data.verificationRequired }));
     });
     helloRetry = setInterval(sendHello, HELLO_RETRY_MS);
     helloTimeout = setTimeout(() => {
@@ -80,7 +80,7 @@
         const result = await handler(data.payload || {});
         window.postMessage({ kind: responseKind, channel, id: data.id, ok: true, result }, '*');
       } catch (error) {
-        window.postMessage({ kind: responseKind, channel, id: data.id, ok: false, error: String(error.message || error), limit: !!error.limit, ambiguous: !!error.ambiguous }, '*');
+        window.postMessage({ kind: responseKind, channel, id: data.id, ok: false, error: String(error.message || error), limit: !!error.limit, ambiguous: !!error.ambiguous, verificationRequired: !!error.verificationRequired }, '*');
       }
     });
   };

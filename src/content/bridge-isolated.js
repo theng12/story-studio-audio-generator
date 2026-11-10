@@ -41,7 +41,7 @@
       clearTimeout(entry.timeout);
       data.ok
         ? entry.resolve(data.result)
-        : entry.reject(Object.assign(new Error(data.error || 'main-world error'), { limit: !!data.limit, ambiguous: !!data.ambiguous }));
+        : entry.reject(Object.assign(new Error(data.error || 'main-world error'), { limit: !!data.limit, ambiguous: !!data.ambiguous, verificationRequired: !!data.verificationRequired }));
     });
     helloRetry = setInterval(sendHello, HELLO_RETRY_MS);
     helloTimeout = setTimeout(() => {

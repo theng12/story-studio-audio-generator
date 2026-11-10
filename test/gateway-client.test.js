@@ -51,7 +51,7 @@ test('inventory carries only observed IDs and original time, never labels or nor
   const inventory = prepareAudioInventory({ fish: observed(), elevenlabs_web: observed({ source: 'fallback' }) }, 'worker', INVENTORY_HEALTH, 100100);
   assert.deepEqual(inventory, { schema: 1, providers: { fish: { source: 'live', complete: true, fetchedAt: 100000, models: [{ id: 'model' }], voices: [{ id: 'voice' }] } } });
   assert.equal(prepareAudioInventory({ fish: observed() }, 'worker', INVENTORY_HEALTH, 100200).providers.fish.fetchedAt, 100000);
-  for (const patch of [{ source: 'fallback' }, { source: 'discovered' }, { complete: false }, { models: [] }, { voices: [] }, { voices: [{ id: '' }] }, { models: [{ id: 4 }] }]) {
+  for (const patch of [{ source: 'fallback' }, { source: 'discovered' }, { complete: false }, { generationAvailable: false }, { verificationRequired: true }, { models: [] }, { voices: [] }, { voices: [{ id: '' }] }, { models: [{ id: 4 }] }]) {
     assert.deepEqual(prepareAudioInventory({ fish: observed(patch) }, 'worker', INVENTORY_HEALTH, 100100).providers, {});
   }
   assert.deepEqual(prepareAudioInventory({ fish: { ...observed(), ok: false } }, 'worker', INVENTORY_HEALTH, 100100).providers, {});

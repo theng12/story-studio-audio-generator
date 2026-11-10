@@ -67,6 +67,7 @@ test('retry keeps a saved artifact in the save-only path and refuses uncertain w
     id: 'save-failed', status: 'pending', phase: 'saving', artifact, attempts: 0,
   });
   assert.equal(retryQueueItem({ id: 'unknown', status: 'failed', ambiguous: true, requiresLocalReview: true }), null);
+  assert.equal(retryQueueItem({ id: 'verification', status: 'failed', verificationRequired: true, ambiguous: false }), null);
   assert.deepEqual(retryQueueItem({ id: 'interrupted', status: 'failed', phase: 'downloading', downloadId: 12, downloadInterrupted: true, artifact }), {
     id: 'interrupted', status: 'pending', phase: 'saving', artifact, attempts: 0,
   });

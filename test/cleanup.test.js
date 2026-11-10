@@ -105,7 +105,7 @@ test('release metadata documents cleanup without stale claims', () => {
   const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
-  assert.equal(manifest.version, '0.7.26');
+  assert.equal(changelog.match(/^## (\d+\.\d+\.\d+)/m)?.[1], manifest.version);
   assert.match(changelog, /^## 0\.7\.26 - Audio Generator cleanup/m);
   assert.match(readme, /signed-in provider web sessions/i);
   assert.doesNotMatch(readme, /api\.fish\.audio|api\.us\.elevenlabs|securetoken\.googleapis|Coming soon/i);

@@ -149,7 +149,7 @@ async function send(tabId, message) {
     throw Object.assign(new Error(`Provider connection failed: ${error?.message || error}`), { ambiguous: isAmbiguousBridgeFailure(error) });
   }
   if (!res || !res.ok)
-    throw Object.assign(new Error(res?.error || 'No response from the provider page.'), { limit: !!res?.limit, ambiguous: !!res?.ambiguous });
+    throw Object.assign(new Error(res?.error || 'No response from the provider page.'), { limit: !!res?.limit, ambiguous: !!res?.ambiguous, verificationRequired: !!res?.verificationRequired });
   return res;
 }
 
@@ -159,6 +159,7 @@ async function produceAudio(job, settings) {
   const p = PROVIDERS[providerId];
   if (!p) throw new Error('This queued provider is no longer supported. Re-queue it with fish.audio or ElevenLabs.');
   if (!job.text || !job.text.trim()) throw new Error('No script text to generate.');
+  if (providerId === 'fish') throw Object.assign(new Error('Fish workspace verification is required; automatic generation is unavailable. No audio request was submitted.'), { verificationRequired: true, ambiguous: false });
 
   // Per-provider tuning (model + voice settings / speed): the item's snapshot
   // from when it was queued, or the current settings for a fresh call.
@@ -691,6 +692,18 @@ async function processQueue() {
           await setQueue(q);
           await writeStatus(`${item.label}: ${it.error}`, 'info');
           continue;
+        }
+        if (e?.verificationRequired) {
+          it.status = 'failed';
+          it.verificationRequired = true;
+          it.error = String(e.message);
+          it.finishedAt = Date.now();
+          if (it.phase === 'generating') delete it.phase;
+          await setQueue(q);
+          await setQueuePaused(true);
+          alarmClear();
+          await writeStatus(`${item.label}: ${it.error}`, 'info');
+          return;
         }
         // A detected credit/quota/rate-limit failure (.limit — see the content
         // scripts / providers.js): re-pend the item (it's not really "failed",
@@ -1321,7 +1334,7 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
           const connection = await gatewayConnection(binding);
           await connection.client.fail(jobId, error, { ambiguous });
           if (!ambiguous) {
-            if (error?.limit) await setQueuePaused(true);
+            if (error?.limit || error?.verificationRequired) await setQueuePaused(true);
             await clearGatewayInFlight();
           }
         }
@@ -1362,7 +1375,7 @@ async function providerInventory(providerId) {
   const response = await send(tab.id, { type: `${p.messageNamespace}:inventory` });
   const inventory = providerId === 'elevenlabs_web'
     ? createElevenInventory(response.raw?.modelsPayload, response.raw?.voices)
-    : createFishInventory(response.raw?.fishModelOptions, response.raw?.voices);
+    : createFishInventory(response.raw?.fishModelOptions, response.raw?.voices, response.raw);
   return { ok: true, inventory: { ...inventory, fetchedAt: Date.now() } };
 }
 

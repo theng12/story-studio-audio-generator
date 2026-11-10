@@ -3,7 +3,7 @@
 const ELEVEN_DEFAULT_MAX_CHARS = 4500;
 
 export const FISH_FALLBACK_MODELS = [
-  { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro - Free, newest' },
+  { id: 's2.1-pro', label: 'Fish Audio S2.1 Pro (saved default)' },
   { id: 's2-pro', label: 'Fish Audio S2 Pro - Legacy' },
   { id: 's1', label: 'Fish Audio S1 - Legacy' },
 ];
@@ -45,33 +45,33 @@ export const PROVIDER_SETTING_DEFAULTS = Object.fromEntries(
 
 const knownElevenControls = Object.fromEntries(ELEVEN_FALLBACK_MODELS.map((model) => [model.id, model]));
 
-const fishBackendId = (label) => {
-  const match = String(label).match(/\bS(\d+(?:\.\d+)?)(?:\s+(Pro))?\b/i);
-  return match ? `s${match[1]}${match[2] ? '-pro' : ''}` : '';
-};
-
-// Fish's visible Model control names the backend but does not expose a stable
-// API contract. Derive the known backend ids only from its user-visible labels.
-export function normalizeFishTtsModels(labels) {
+// Labels are useful for listing, but never manufacture request IDs or generation support.
+export function normalizeFishTtsModels(rows) {
   const seen = new Set();
-  return (Array.isArray(labels) ? labels : [])
-    .map((label) => String(label || '').replace(/\s+/g, ' ').trim())
-    .map((label) => ({ id: fishBackendId(label), label }))
-    .filter((model) => model.id && !seen.has(model.id) && seen.add(model.id));
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: typeof row?.id === 'string' ? row.id : '',
+    label: String(typeof row === 'string' ? row : row?.label || '').replace(/\s+/g, ' ').trim(),
+    generationSupported: false,
+  })).filter((model) => model.label && !seen.has(model.id || model.label) && seen.add(model.id || model.label));
 }
 
-export function createFishInventory(modelOptions, voices = []) {
-  const { labels, complete } = Array.isArray(modelOptions)
-    ? { labels: modelOptions, complete: true }
-    : modelOptions || {};
-  const models = normalizeFishTtsModels(labels);
-  const source = !models.length ? 'fallback' : complete ? 'live' : 'discovered';
+export function createFishInventory(modelOptions, voices = [], discovery = {}) {
+  const options = Array.isArray(modelOptions) ? { labels: modelOptions } : modelOptions || {};
+  const models = normalizeFishTtsModels(options.models || options.labels);
+  const source = !models.length ? 'fallback' : options.complete === true && models.every((model) => model.id) ? 'live' : 'discovered';
+  const limitKnown = Number.isSafeInteger(options.maxChars) && options.maxChars > 0 && options.limitSource === 'workspace-textarea';
   return {
     voices: Array.isArray(voices) ? voices : [],
-    models: models.length ? models : FISH_FALLBACK_MODELS,
+    voiceScope: discovery.voiceScope || 'unverified',
+    voicesComplete: false,
+    models: (models.length ? models : FISH_FALLBACK_MODELS.map((model) => ({ ...model, generationSupported: false })))
+      .map((model) => limitKnown && model.id && model.id === options.selectedId ? { ...model, maxChars: options.maxChars, limitSource: options.limitSource } : model),
     capabilities: PROVIDERS.fish.capabilities,
     source,
     complete: source === 'live',
+    generationAvailable: false,
+    verificationRequired: true,
+    limitation: 'Workspace verification is required; listing models and voices does not establish generation support.',
   };
 }
 

@@ -27,7 +27,7 @@
         const result = await handler(data.payload || {});
         window.postMessage({ kind: responseKind, channel, id: data.id, ok: true, result }, '*');
       } catch (error) {
-        window.postMessage({ kind: responseKind, channel, id: data.id, ok: false, error: String(error.message || error), limit: !!error.limit, ambiguous: !!error.ambiguous }, '*');
+        window.postMessage({ kind: responseKind, channel, id: data.id, ok: false, error: String(error.message || error), limit: !!error.limit, ambiguous: !!error.ambiguous, verificationRequired: !!error.verificationRequired }, '*');
       }
     });
   };

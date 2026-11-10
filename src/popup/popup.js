@@ -277,7 +277,14 @@ function renderInventoryStatus() {
     : source === 'fallback'
       ? 'Inventory: fallback models; live discovery is unavailable.'
       : '';
-  $('providerNote').textContent = [provider?.uiNote, inventoryNote].filter(Boolean).join(' ');
+  const inventory = providerInventories[currentProvider()];
+  const selected = inventory?.models?.find((model) => model.id === currentProviderSettings().model);
+  const limitNote = currentProvider() === 'fish'
+    ? selected?.limitSource === 'workspace-textarea' ? `Selected model limit: ${selected.maxChars} characters.` : 'Current character limit has not been observed.'
+    : '';
+  const voiceNote = inventory?.voiceScope === 'owned-and-visible' ? 'Voices include owned and visible workspace choices; this is a partial list.' : '';
+  const verificationNote = inventory?.verificationRequired ? 'Verification required; automatic generation is unavailable. Listed models are not verified for generation.' : '';
+  $('providerNote').textContent = [provider?.uiNote, inventoryNote, voiceNote, limitNote, verificationNote].filter(Boolean).join(' ');
 }
 
 // Open (or focus) the current provider's page — the only place the extension
@@ -319,7 +326,11 @@ function renderVoiceSettings() {
   if (hasModels) {
     const sel = $('vsModel');
     const models = modelsForProviderSettings(p, ps, providerInventories[p]);
-    sel.replaceChildren(...models.map((m) => new Option(m.label, m.id)));
+    sel.replaceChildren(...models.map((m) => {
+      const option = new Option(m.id ? m.label : `${m.label} — request ID unavailable`, m.id);
+      option.disabled = !m.id;
+      return option;
+    }));
     const resolved = eleven ? resolveElevenModel(ps.model, models) : resolveFishModel(ps.model, models);
     sel.value = resolved.model.id;
     meta = resolved.model;
@@ -1226,7 +1237,7 @@ function renderQueueList(queue) {
     if (it.status === 'failed' && it.error) label.title = it.error;
     const state = document.createElement('span');
     state.className = `qstate ${isReviewRequired(it) ? 'review' : it.status}`;
-    state.textContent = isReviewRequired(it) ? 'Review required' : (Q_STATUS[it.status] || 'Pending');
+    state.textContent = isReviewRequired(it) ? 'Review required' : it.verificationRequired ? 'Verification required' : (Q_STATUS[it.status] || 'Pending');
     li.append(number, label, state);
     const actions = document.createElement('div');
     actions.className = 'qactions';
@@ -1237,7 +1248,7 @@ function renderQueueList(queue) {
       x.title = 'Remove from queue';
       x.dataset.id = it.id;
       actions.appendChild(x);
-    } else if (it.status === 'failed' && PROVIDERS[it.provider] && !isReviewRequired(it)) {
+    } else if (it.status === 'failed' && PROVIDERS[it.provider] && retryQueueItem(it)) {
       const r = document.createElement('button');
       r.className = 'qretry';
       r.textContent = '↻';

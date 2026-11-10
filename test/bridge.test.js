@@ -112,6 +112,31 @@ test('world-specific bridge entries initialize the real provider consumers', () 
   }
 });
 
+for (const split of [false, true]) {
+  test(`${split ? 'manifest world-specific' : 'combined'} bridge preserves verification-required refusal`, async () => {
+    const listeners = [];
+    const window = {
+      addEventListener(type, listener) { if (type === 'message') listeners.push(listener); },
+      postMessage(data) { queueMicrotask(() => listeners.forEach((listener) => listener({ source: window, data }))); },
+    };
+    let nextId = 0;
+    const build = (file) => {
+      const context = vm.createContext({ window, crypto: { randomUUID: () => `verification-${++nextId}` }, setTimeout, clearTimeout, setInterval, clearInterval });
+      vm.runInContext(readFileSync(new URL(`../src/content/${file}`, import.meta.url), 'utf8'), context);
+      return context.__STORY_STUDIO_BRIDGE__;
+    };
+    const main = build(split ? 'bridge-main.js' : 'bridge.js');
+    const isolated = split ? build('bridge-isolated.js') : main;
+    main.createMainBridge({
+      requestKind: 'VERIFY_REQ', responseKind: 'VERIFY_RES',
+      handlers: { generate() { throw Object.assign(new Error('Verification required; no request submitted.'), { verificationRequired: true, ambiguous: false }); } },
+    });
+    const bridge = isolated.createIsolatedBridge({ requestKind: 'VERIFY_REQ', responseKind: 'VERIFY_RES', label: 'Fixture' });
+    await assert.rejects(bridge.callMain('generate', {}), (error) =>
+      error.verificationRequired === true && error.ambiguous === false && /no request submitted/.test(error.message));
+  });
+}
+
 test('isolated-first startup retries hello until a later MAIN bridge can correlate a call', async () => {
   const listeners = [];
   const window = {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.28 — 2026-11-10
+
+- Show discovered model and voice choices without treating a partial list as generation support.
+- Mark choices whose request details are unavailable instead of guessing them.
+- Pause narration when workspace verification is required, without retrying it automatically.
+- Keep saved audio and selected settings while generation is unavailable.
+
 ## 0.7.27 — 2026-11-09
 
 - Added an optional Gateway Studio mode alongside Story Studio and Standalone.
