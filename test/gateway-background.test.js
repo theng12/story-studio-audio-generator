@@ -8,6 +8,7 @@ const AUDIO = Buffer.from('RIFF exact fixture audio bytes');
 const MODEL = ['eleven', 'multilingual', 'v2'].join('_');
 const JOB = { jobId: 'audio/a', kind: 'audio', provider: 'elevenlabs_web', voice: 'v1', text: 'Hello.', model: MODEL, speed: 1.2 };
 const clone = (value) => value === undefined ? value : structuredClone(value);
+const claimsFor = (worker, provider) => worker.calls.filter((entry) => entry.url.endsWith('/claim') && JSON.parse(entry.init.body).account?.provider === provider);
 function area(state) {
   return {
     async get(keys) { return keys == null ? clone(state) : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((key) => key in state).map((key) => [key, clone(state[key])])); },
@@ -25,7 +26,7 @@ function cacheStorage() {
   }; } };
 }
 async function waitFor(predicate) { for (let n = 0; n < 400; n++) { if (predicate()) return; await pause(5); } throw new Error('Actual audio background fixture timed out.'); }
-async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled = true, autoStart = false, job = JOB, answers = [{ ok: true }], onGenerate, onSave, onInventory, inventoryReply, inventoryMaxAgeSeconds = 90, inventoryMaxBytes = 1048576, claimStatus, providerFailure, providerReply, tabs = [{ id: 7, status: 'complete' }], failAnswer = { ok: true }, lostClaim = false, uploadLimit = 1024, voices = [{ id: 'v1', name: 'Fixture voice' }] } = {}) {
+async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled = true, autoStart = false, job = JOB, answers = [{ ok: true }], onGenerate, onSave, onInventory, inventoryReply, inventoryMaxAgeSeconds = 90, inventoryMaxBytes = 1048576, claimStatus, quoteRequired = false, accounts = true, providerFailure, providerReply, tabs = [{ id: 7, status: 'complete' }], failAnswer = { ok: true }, lostClaim = false, uploadLimit = 1024, voices = [{ id: 'v1', name: 'Fixture voice' }] } = {}) {
   local ||= { gatewaySettings: { gatewayModeEnabled: enabled, gatewayBaseUrl: 'http://gateway.invalid' }, gatewayWorkerToken: 'fixture-only', gatewayWorkerId: 'fixture-audio' };
   const sync = { settings: { mode, maxRetries: 0, humanDelayMinSec: 0, humanDelayMaxSec: 0, providerSettings: { elevenlabs_web: { model: 'wrong-local-model', speed: 1.1 } } } };
   const savedEnabled = local.gatewaySettings.gatewayModeEnabled;
@@ -46,6 +47,8 @@ async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled =
       query: async () => tabs,
       async sendMessage(id, message) {
         provider.push(clone(message));
+        if (message.type === 'fish:account') return accounts ? { ok: true, raw: { accountId: 'fish.fixture-account', signedIn: true } } : { ok: false, error: 'No signed-in fish account.' };
+        if (message.type === 'eleven:account') return accounts ? { ok: true, raw: { accountId: 'elevenlabs_web.fixture-account', signedIn: true } } : { ok: false, error: 'No signed-in ElevenLabs account.' };
         if (message.type === 'fish:inventory') return { ok: true, raw: { fishModelOptions: { models: [{ id: 'drama-3', label: 'Drama3' }], complete: true }, voices } };
         if (message.type === 'eleven:inventory') {
           await onInventory?.(local);
@@ -72,9 +75,14 @@ async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled =
     if (url.endsWith('/claim')) {
       if (lostClaim) throw new Error('Fixture claim outcome unknown.');
       if (claimStatus) return new Response(null, { status: claimStatus });
-      const eligible = Object.keys(JSON.parse(init.body).audioInventory.providers).length > 0;
-      return job && eligible ? Response.json({ job }) : new Response(null, { status: 204 });
+      const body = JSON.parse(init.body);
+      const eligible = Object.keys(body.audioInventory.providers).length > 0;
+      // The Gateway binds an account to the job's provider; the fixture does too.
+      const sameProvider = !body.account || !job || body.account.provider === job.provider;
+      if (quoteRequired) return Response.json({ job: null, quoteRequired: { job, payloadSha256: 'a'.repeat(64), executionAuthorized: false } });
+      return job && eligible && sameProvider ? Response.json({ job }) : new Response(null, { status: 204 });
     }
+    if (url.endsWith('/telemetry')) return Response.json({ ok: true });
     if (url.endsWith('/result')) { call.bytes = Buffer.from(await init.body.get('file').arrayBuffer()); call.mime = init.body.get('mediaType'); return Response.json(answers.length > 1 ? answers.shift() : answers[0]); }
     if (url.endsWith('/fail')) return Response.json(failAnswer);
     if (url.endsWith('/progress')) return Response.json({ ok: true });
@@ -104,41 +112,43 @@ test('real claim/inventory/generation/upload returns exact bytes with authoritat
     assert.equal(generation[0].voice, JOB.voice);
     assert.equal(generation[0].speed, JOB.speed);
     assert.deepEqual(worker.calls.find((entry) => entry.url.endsWith('/result')).bytes, AUDIO);
-    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+    assert.equal(claimsFor(worker, JOB.provider).length, 1);
     assert.equal(worker.cache.rows.size, 0);
     assert.equal(worker.local.gatewayInFlightJobId, undefined);
     assert.equal(worker.sync.settings.gatewayBaseUrl, undefined);
   } finally { worker.restore(); }
 });
 
-test('no open workspace sends empty eligibility on every idle poll without generating', async () => {
+test('no open workspace observes no account and attempts no claim, repeatedly', async () => {
   const worker = await boot({ tabs: [] });
   try {
     for (let n = 0; n < 2; n++) {
       worker.tick();
-      await waitFor(() => worker.local.gatewayStatus?.idle);
+      await waitFor(() => worker.local.gatewayStatus?.accountUnavailable);
       await worker.settled();
     }
-    const claims = worker.calls.filter((entry) => entry.url.endsWith('/claim'));
-    assert.equal(claims.length, 2);
-    for (const claim of claims) assert.deepEqual(JSON.parse(claim.init.body).audioInventory, { schema: 1, providers: {} });
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 0);
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/telemetry')).length, 0);
+    assert.equal(worker.local.gatewayStatus.balance, 'Unknown');
+    assert.match(worker.local.gatewayStatus.error, /no claim was attempted/i);
     assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/fail')).length, 0);
     assert.equal(worker.local.gatewayInFlightPhase, undefined);
     assert.equal(worker.provider.length, 0);
   } finally { worker.restore(); }
 });
 
-test('workspace loss replaces the earlier snapshot with empty eligibility on the next claim', async () => {
+test('workspace loss stops the claim and reports no observed account on the next poll', async () => {
   const tabs = [{ id: 7, status: 'complete' }];
   const worker = await boot({ tabs, job: null });
   try {
     worker.tick(); await waitFor(() => worker.local.gatewayStatus?.idle); await worker.settled();
+    const first = claimsFor(worker, 'elevenlabs_web');
+    assert.equal(first.length, 1);
+    assert.ok(JSON.parse(first[0].init.body).audioInventory.providers.elevenlabs_web);
+    const claimed = worker.calls.filter((entry) => entry.url.endsWith('/claim')).length;
     tabs.length = 0;
-    worker.tick(); await worker.settled();
-    const claims = worker.calls.filter((entry) => entry.url.endsWith('/claim'));
-    assert.equal(claims.length, 2);
-    assert.ok(JSON.parse(claims[0].init.body).audioInventory.providers.elevenlabs_web);
-    assert.deepEqual(JSON.parse(claims[1].init.body).audioInventory.providers, {});
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.accountUnavailable); await worker.settled();
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, claimed);
     assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
   } finally { worker.restore(); }
 });
@@ -237,7 +247,7 @@ for (const code of [402, 429]) {
       assert.equal(worker.local.gatewayInFlightPhase, undefined);
       assert.equal(worker.local.queuePaused, true);
       worker.tick(); await worker.settled();
-      assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+      assert.equal(claimsFor(worker, JOB.provider).length, 1);
       assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
     } finally { worker.restore(); }
   });
@@ -249,7 +259,7 @@ test('unacknowledged explicit provider rejection remains held without another cl
     worker.tick(); await waitFor(() => worker.local.gatewayStatus?.held); await worker.settled();
     assert.equal(worker.local.gatewayInFlightPhase, 'generating');
     worker.tick(); await worker.settled();
-    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+    assert.equal(claimsFor(worker, JOB.provider).length, 1);
     assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
   } finally { worker.restore(); }
 });
@@ -452,4 +462,45 @@ test('upload limit retains output; lock prevents local enqueue from generating c
     assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/result')).length, 0);
     assert.equal(worker.local.queue[0].status, 'pending');
   } finally { release(); worker.restore(); }
+});
+
+test('an unreadable provider account attempts no claim and shows unknown balance', async () => {
+  const worker = await boot({ accounts: false });
+  try {
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.accountUnavailable); await worker.settled();
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 0);
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/telemetry')).length, 0);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
+    assert.equal(worker.local.gatewayStatus.balance, 'Unknown');
+    assert.match(worker.local.gatewayStatus.error, /no claim was attempted/i);
+  } finally { worker.restore(); }
+});
+
+test('claim carries a schema 1 account for the job provider and never a numeric balance', async () => {
+  const worker = await boot();
+  try {
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.lastJob === JOB.jobId); await worker.settled();
+    const claim = claimsFor(worker, JOB.provider)[0];
+    const account = JSON.parse(claim.init.body).account;
+    assert.equal(account.schema, 1);
+    assert.equal(account.provider, JOB.provider);
+    assert.equal(account.accountId, 'elevenlabs_web.fixture-account');
+    assert.equal(account.signIn, 'signed_in');
+    assert.equal(account.readiness, 'ready');
+    assert.equal(account.balance, null);
+    assert.equal(JSON.stringify(claim.init.body).includes('"balance":{"value"'), false);
+  } finally { worker.restore(); }
+});
+
+test('a quote preview is reported without a second claim, generation or invented price', async () => {
+  const worker = await boot({ quoteRequired: true });
+  try {
+    worker.tick(); await waitFor(() => worker.local.gatewayStatus?.quoteRequired); await worker.settled();
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/claim')).length, 1);
+    assert.equal(JSON.parse(worker.calls.find((entry) => entry.url.endsWith('/claim')).init.body).quote, undefined);
+    assert.equal(worker.calls.filter((entry) => entry.url.endsWith('/result')).length, 0);
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 0);
+    assert.equal(worker.local.gatewayStatus.balance, 'Unknown');
+    assert.match(worker.local.gatewayStatus.error, /credit quote/i);
+  } finally { worker.restore(); }
 });

@@ -121,7 +121,7 @@ async function init() {
     renderConnectionStatus();
   }, 1000);
   const renderGatewayStatus = (state) => {
-    $('gatewayStatus').textContent = state?.error || (state?.phase === 'generating' ? 'Generating audio for Gateway.' : state?.phase === 'uploading' ? 'Delivering retained audio to Gateway.' : state?.lastJob ? 'Audio delivered to Gateway.' : state?.idle ? 'Waiting for Gateway audio jobs.' : 'Connection has not been checked.');
+    $('gatewayStatus').textContent = state?.error || (state?.phase === 'generating' ? 'Generating audio for Gateway.' : state?.phase === 'uploading' ? 'Delivering retained audio to Gateway.' : state?.lastJob ? 'Audio delivered to Gateway.' : state?.idle ? 'Waiting for Gateway audio jobs.' : 'Connection has not been checked.') + (state?.balance ? ` Balance: ${state.balance}.` : '');
     $('retryGatewayDelivery').hidden = !state?.held || !state?.jobId;
   };
   renderGatewayStatus((await chrome.storage.local.get('gatewayStatus')).gatewayStatus);

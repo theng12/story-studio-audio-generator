@@ -17,6 +17,7 @@ import { PROVIDERS, assertProviderSettingsSnapshot, buildElevenVoiceSettings, cr
 import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifact, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
 import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
 import { buildGatewayClient, GATEWAY_KIND, prepareAudioInventory, validateTtsJob, validateHealthResponse, gatewayBindingFingerprint } from './lib/gateway-client.js';
+import { audioObservation, balanceLabel } from './lib/gateway-account.js';
 
 const QUEUE_KEY = 'queue';
 const ALARM = 'queueTick';
@@ -1300,14 +1301,47 @@ async function gatewayPoll({ retryDelivery = false } = {}) {
       catch { /* Missing or failed discovery authorizes no work for this provider. */ }
     }
     const audioInventory = prepareAudioInventory(observations, connection.creds.workerId, connection.health);
+    // The Gateway binds an account to the job's provider, so one observation per
+    // signed-in provider; without any observation there is nothing to claim with.
+    const prepared = [];
+    for (const provider of Object.keys(PROVIDERS)) {
+      let identity = null;
+      try { identity = await providerAccount(provider); } catch { /* An unobserved account authorizes no claim. */ }
+      const observation = audioObservation({
+        provider,
+        accountId: identity?.accountId || '',
+        signedIn: identity?.signedIn === true,
+        inventoryLive: observations[provider]?.inventory?.source === 'live',
+        source: `extension.audio.${provider}`,
+        controlRevision: connection.health?.control?.revision ?? null,
+      });
+      if (observation) prepared.push(observation);
+    }
+    if (!prepared.length) {
+      await clearGatewayInFlight();
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), accountUnavailable: true, balance: 'Unknown', error: 'No signed-in provider account was observed; no claim was attempted.' } });
+      return { ok: true, accountUnavailable: true };
+    }
+    const balance = balanceLabel(prepared[0].account);
     binding = connection.binding;
     await gatewayConnection(binding); // Discovery must not dispatch with a changed mode or token.
     if (await isPaused()) return { ok: true, paused: true };
+    await connection.client.telemetry(connection.creds.workerId, prepared[0]).catch(() => {});
     await setGatewayInFlight('', binding, 'claiming');
-    const job = await connection.client.claim(connection.creds.workerId, audioInventory);
+    let job = null;
+    for (const observation of prepared) {
+      const reply = await connection.client.claim(connection.creds.workerId, audioInventory, observation);
+      if (reply?.quoteRequired) {
+        // Paid work needs a price this worker cannot observe; it is reported, never guessed.
+        await clearGatewayInFlight();
+        await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: false, at: Date.now(), quoteRequired: true, balance, error: 'Gateway needs a credit quote; audio pricing is not observed, so no work was claimed.' } });
+        return { ok: true, quoteRequired: true };
+      }
+      if (reply?.job) { job = reply.job; break; }
+    }
     if (!job) {
       await clearGatewayInFlight();
-      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true } });
+      await chrome.storage.local.set({ [GATEWAY_STATUS_KEY]: { ok: true, at: Date.now(), idle: true, balance } });
       return { ok: true, idle: true };
     }
     jobId = job.jobId;
@@ -1377,6 +1411,18 @@ async function providerInventory(providerId) {
     ? createElevenInventory(response.raw?.modelsPayload, response.raw?.voices)
     : createFishInventory(response.raw?.fishModelOptions, response.raw?.voices, response.raw);
   return { ok: true, inventory: { ...inventory, fetchedAt: Date.now() } };
+}
+
+// An opaque account identity read inside the signed-in page. No balance is
+// read: audio has no observed credit source yet, so it must stay unknown.
+async function providerAccount(providerId) {
+  const p = PROVIDERS[providerId];
+  if (!p) throw new Error('This provider is no longer supported.');
+  const tab = await findProviderTab(p);
+  if (!tab) throw new Error(`Open the ${p.displayName} page to observe its account.`);
+  const response = await send(tab.id, { type: `${p.messageNamespace}:account` });
+  if (typeof response.raw?.accountId !== 'string' || !response.raw.accountId.trim()) throw new Error('The signed-in page exposed no stable account identity.');
+  return { accountId: response.raw.accountId, signedIn: response.raw.signedIn === true };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

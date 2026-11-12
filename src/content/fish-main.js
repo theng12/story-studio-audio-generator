@@ -106,5 +106,25 @@
     // shortcut: normal verification inputs are not yet captured; restore submission only with that contract.
     throw Object.assign(new Error('Fish workspace verification is required. Generation is unavailable until its normal verification flow is supported. No request was submitted.'), { verificationRequired: true, ambiguous: false });
   }
-  window.__STORY_STUDIO_BRIDGE__.createMainBridge({ requestKind: REQ, responseKind: RES, handlers: { inventory, generate } });
+  // Opaque identity only, never the bearer token itself.
+  // shortcut: no stable Fish account id is captured yet, so a non-JWT token yields a digest that rotates with it.
+  const jwtSubject = (value) => {
+    try {
+      const part = String(value).split('.')[1];
+      if (!part) return null;
+      const claims = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=')));
+      const id = claims.user_id || claims.sub || claims.uid;
+      return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,100}$/.test(id) ? id : null;
+    } catch { return null; }
+  };
+  async function account() {
+    const value = token();
+    if (!value) throw new Error('Not signed into fish.audio — open fish.audio and log in.');
+    const subject = jwtSubject(value);
+    if (subject) return { accountId: `fish.${subject}`, signedIn: true };
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+    return { accountId: `fish.${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 40)}`, signedIn: true };
+  }
+
+  window.__STORY_STUDIO_BRIDGE__.createMainBridge({ requestKind: REQ, responseKind: RES, handlers: { inventory, generate, account } });
 })();

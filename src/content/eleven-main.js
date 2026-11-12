@@ -147,9 +147,22 @@
     }
   }
 
+  // The Firebase ID token's subject is the stable, opaque account id. The token
+  // itself never leaves the page and no balance is read.
+  async function account() {
+    const value = await getToken();
+    try {
+      const part = String(value).split('.')[1] || '';
+      const claims = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=')));
+      const id = claims.user_id || claims.sub;
+      if (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,100}$/.test(id)) return { accountId: `elevenlabs_web.${id}`, signedIn: true };
+    } catch { /* An unreadable token is not an account identity. */ }
+    throw new Error('ElevenLabs exposed no stable account identity.');
+  }
+
   window.__STORY_STUDIO_BRIDGE__.createMainBridge({
     requestKind: REQ,
     responseKind: RES,
-    handlers: { inventory, generate },
+    handlers: { inventory, generate, account },
   });
 })();

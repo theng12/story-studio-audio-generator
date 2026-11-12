@@ -92,18 +92,30 @@ export function buildGatewayClient(baseUrl, token) {
   }
   return {
     async health() { const raw = await request('/api/workers/health', { timeoutMs: 8000 }); return { ok: raw.ok === true, raw }; },
-    async claim(workerId, audioInventory) {
+    async telemetry(workerId, observation) {
+      if (typeof workerId !== 'string' || !workerId.trim() || workerId.length > 120) throw new Error('Worker ID must contain 1 to 120 characters.');
+      return accepted(await request('/api/workers/telemetry', { json: { workerId, kind: GATEWAY_KIND, ...observation } }));
+    },
+    async claim(workerId, audioInventory, observation = {}) {
       if (typeof workerId !== 'string' || !workerId.trim() || workerId.length > 120) throw new Error('Worker ID must contain 1 to 120 characters.');
       let envelope;
       try {
-        envelope = await request('/api/workers/claim', { json: { workerId, kind: GATEWAY_KIND, ...(audioInventory === undefined ? {} : { audioInventory }) }, idle: true });
+        envelope = await request('/api/workers/claim', { json: { workerId, kind: GATEWAY_KIND, ...(audioInventory === undefined ? {} : { audioInventory }), ...observation }, idle: true });
       } catch (error) {
         if ([413, 422].includes(error?.status)) error.claimRejected = true;
         throw error;
       }
       if (envelope === null) return null;
+      const preview = envelope.quoteRequired;
+      if (preview) {
+        // A paid hand-off needs a price this worker cannot observe: report it, never guess one.
+        if (preview.executionAuthorized !== false || typeof preview.payloadSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(preview.payloadSha256)) {
+          throw new Error('Gateway quote preview is malformed; no work will run.');
+        }
+        return { quoteRequired: preview };
+      }
       if (typeof envelope.job?.jobId !== 'string' || !envelope.job.jobId.trim()) throw new Error('Gateway claim has no job ID.');
-      return envelope.job;
+      return { job: envelope.job };
     },
     async progress(id, phase, message = '') { return accepted(await request(jobPath(id, 'progress'), { json: { phase, message } })); },
     async fail(id, error, { ambiguous = true } = {}) { return accepted(await request(jobPath(id, 'fail'), { json: { error: String(error?.message || error).slice(0, 500), ambiguous: ambiguous !== false } })); },

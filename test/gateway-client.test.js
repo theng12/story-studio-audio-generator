@@ -87,7 +87,7 @@ test('wire paths/envelope, explicit answers and no credential redirects', async 
   globalThis.fetch = async (url, init) => { calls.push({ url, init }); return Response.json(answer); };
   const client = buildGatewayClient('http://gateway.invalid', 'fixture');
   try {
-    assert.deepEqual(await client.claim('worker'), job);
+    assert.deepEqual(await client.claim('worker'), { job });
     assert.deepEqual(JSON.parse(calls[0].init.body), { workerId: 'worker', kind: 'audio' });
     answer = { ok: true };
     await client.progress(job.jobId, 'generating', 'fixture');
@@ -137,5 +137,21 @@ test('idle204 and error bodies do not leak echoed credentials', async () => {
     await assert.rejects(client.claim('worker'), (error) => error.message.includes('401') && !error.message.includes('reflected'));
     assert.throws(() => buildGatewayClient('https://user:secret@gateway.invalid', 'fixture'));
     assert.throws(() => buildGatewayClient('https://gateway.invalid?token=secret', 'fixture'));
+  } finally { globalThis.fetch = original; }
+});
+
+test('a quote preview is returned as a preview and never as work', async () => {
+  const original = globalThis.fetch;
+  const client = buildGatewayClient('http://gateway.invalid', 'fixture');
+  const preview = { job: { jobId: 'audio/a' }, payloadSha256: 'b'.repeat(64), executionAuthorized: false };
+  try {
+    globalThis.fetch = async () => Response.json({ job: null, quoteRequired: preview });
+    assert.deepEqual(await client.claim('worker'), { quoteRequired: preview });
+    globalThis.fetch = async () => Response.json({ job: null, quoteRequired: { ...preview, executionAuthorized: true } });
+    await assert.rejects(client.claim('worker'), (error) => error.message.includes('preview'));
+    globalThis.fetch = async () => Response.json({ job: null, quoteRequired: { ...preview, payloadSha256: 'not-a-digest' } });
+    await assert.rejects(client.claim('worker'), (error) => error.message.includes('preview'));
+    globalThis.fetch = async () => Response.json({ job: null });
+    await assert.rejects(client.claim('worker'), (error) => error.message.includes('no job ID'));
   } finally { globalThis.fetch = original; }
 });

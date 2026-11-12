@@ -18,6 +18,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: String(e.message || e), limit: !!e.limit, ambiguous: !!e.ambiguous, verificationRequired: !!e.verificationRequired }));
     return true;
   }
+  if (msg?.type === 'fish:account') {
+    bridge.callMain('account', {})
+      .then((raw) => sendResponse({ ok: true, raw }))
+      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
   if (msg?.type === 'fish:inventory') {
     bridge.callMain('inventory', {})
       .then((raw) => sendResponse({ ok: true, raw }))
