@@ -2,6 +2,10 @@
 
 Older releases are in `git log`.
 
+## 0.7.29 — 2026-11-12
+
+- Removed Fleet Hub entirely.
+
 ## 0.7.28 — 2026-11-10
 
 - Show discovered model and voice choices without treating a partial list as generation support.

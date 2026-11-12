@@ -86,7 +86,7 @@ test('generation has no provider-default model or voice fallback', () => {
   assert.doesNotMatch(eleven, /model \|\| MODEL/);
 });
 
-test('Story Studio and Fleet boundaries are enforced', async () => {
+test('Story Studio boundaries are enforced', async () => {
   const background = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
   const popup = readFileSync(new URL('../src/popup/popup.js', import.meta.url), 'utf8');
   const options = readFileSync(new URL('../src/options/options.html', import.meta.url), 'utf8');
@@ -94,7 +94,6 @@ test('Story Studio and Fleet boundaries are enforced', async () => {
   assert.match(background, /storyStudioSection\(item\.sectionSlug\)/);
   assert.match(background, /Unsupported Story Studio section/);
   assert.match(background, /if \(await preflightStudioPassword\(q\[currentIdx\], settings\)\) return;/);
-  assert.match(background, /actions: \['pause_after_current', 'resume_hub_pause', 'clear_pending'\]/);
   assert.doesNotMatch(background, /case 'retry_failed'/);
   assert.match(options, /browser session only/);
   const { StudioClient } = await import('../src/lib/story-studio.js');
@@ -109,6 +108,12 @@ test('release metadata documents cleanup without stale claims', () => {
   assert.match(changelog, /^## 0\.7\.26 - Audio Generator cleanup/m);
   assert.match(readme, /signed-in provider web sessions/i);
   assert.doesNotMatch(readme, /api\.fish\.audio|api\.us\.elevenlabs|securetoken\.googleapis|Coming soon/i);
+});
+
+test('Fleet Hub is fully removed', () => {
+  for (const file of ['../src/options/options.html', '../src/lib/config.js', '../src/background.js']) {
+    assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), 'utf8'), /fleet/i, file);
+  }
 });
 
 test('keeps an unknown missing section visible but unsupported', () => {

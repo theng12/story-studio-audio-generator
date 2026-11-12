@@ -55,42 +55,6 @@
       <p class="hint">Finished audio is saved back to the connected Story Studio project.</p>
     </section>
 
-    <section class="settings-section">
-      <span class="settings-section-title">Fleet Hub</span>
-      <label class="checkbox">
-        <input id="fleetAgentEnabled" type="checkbox" />
-        <span>Enable Fleet telemetry</span>
-      </label>
-      <p class="hint">Reports this extension’s local queue health to your Fleet Hub. It never gives the Hub direct provider access.</p>
-      <label>Hub URL
-        <input id="fleetHubUrl" placeholder="http://your-main-mac.tailXXXX.ts.net:8799" />
-      </label>
-      <div class="connection-actions">
-        <button id="grantFleet" class="btn" type="button">Grant Hub access</button>
-        <button id="testFleet" class="btn" type="button">Test Hub connection</button>
-      </div>
-      <div class="connection-feedback">
-        <span id="fleetGrantStatus" class="connection-note" aria-live="polite"></span>
-        <span id="fleetTestStatus" class="connection-note" aria-live="polite"></span>
-      </div>
-      <label>Machine name
-        <input id="fleetAgentName" placeholder="Mac Mini A" maxlength="80" />
-      </label>
-      <label>Local pairing secret
-        <input id="fleetPairingSecret" type="password" autocomplete="new-password" placeholder="Secret configured on the Fleet Hub" />
-      </label>
-      <p class="hint">The pairing secret stays in this browser profile and signs each Hub request and response.</p>
-      <label class="checkbox">
-        <input id="fleetTelemetryDetails" type="checkbox" />
-        <span>Include current item labels and retryable item IDs</span>
-      </label>
-      <label class="checkbox">
-        <input id="fleetQueueControlEnabled" type="checkbox" />
-        <span>Allow safe Hub queue controls</span>
-      </label>
-      <p class="hint">Hub controls are limited to pause-after-current, resume of a Hub pause, and clear pending. Provider, model, voice, pacing, cooldown, credentials, and site permissions remain local.</p>
-    </section>
-
     <section class="card">
       <h3>Gateway Worker (opt-in)</h3>
       <label class="checkbox">
