@@ -107,7 +107,9 @@
     throw Object.assign(new Error('Fish workspace verification is required. Generation is unavailable until its normal verification flow is supported. No request was submitted.'), { verificationRequired: true, ambiguous: false });
   }
   // Opaque identity only, never the bearer token itself.
-  // shortcut: no stable Fish account id is captured yet, so a non-JWT token yields a digest that rotates with it.
+  // Known-weak identity: no stable Fish account id is captured yet, so a non-JWT
+  // token yields a digest that rotates with the token. Replace when a stable Fish
+  // id is captured.
   const jwtSubject = (value) => {
     try {
       const part = String(value).split('.')[1];

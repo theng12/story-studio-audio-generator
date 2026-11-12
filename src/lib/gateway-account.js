@@ -29,6 +29,8 @@ export function audioAccount({ provider, accountId, source, observedAt, signedIn
 // One observation for a claim or a telemetry call: the account plus the worker
 // state the Gateway validates alongside it. Returns null when no account was
 // observed, which is the signal not to claim at all.
+// Unchecked: readiness 'ready' with a null balance has never been accepted by a
+// real Gateway; only a signed-in window can prove it.
 export function audioObservation({ provider, accountId, signedIn, inventoryLive, source,
   observedAt = new Date().toISOString(), paused, controlRevision = null, pacing, nextEligibleAt = null }) {
   const account = audioAccount({ provider, accountId, source, observedAt, signedIn, inventoryLive });
