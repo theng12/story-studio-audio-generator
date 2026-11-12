@@ -116,6 +116,14 @@ test('Fleet Hub is fully removed', () => {
   }
 });
 
+test('options page has no Flow ids and hides the Story Studio connection in Gateway mode', () => {
+  const html = readFileSync(new URL('../src/options/options.html', import.meta.url), 'utf8');
+  const options = readFileSync(new URL('../src/options/options.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(html, /flowWorkspaceUrl|grantFlow|flowGrantStatus/);
+  assert.match(html, /id="studioSection"/);
+  assert.match(options, /\$\('studioSection'\)\.hidden = mode === 'gateway'/);
+});
+
 test('keeps an unknown missing section visible but unsupported', () => {
   assert.deepEqual(sectionEligibility('Appendix_A'), {
     supported: false,

@@ -19,9 +19,14 @@ const CHECKBOX_FIELDS = ['gatewayModeEnabled'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
 
+function renderStudioSection(mode) {
+  $('studioSection').hidden = mode === 'gateway';
+}
+
 async function load() {
   await initTheme();
   const s = await getSettings();
+  renderStudioSection(s.mode);
   for (const f of FIELDS) if ($(f)) $(f).value = s[f] ?? DEFAULTS[f] ?? '';
   for (const f of CHECKBOX_FIELDS) if ($(f)) $(f).checked = s[f] === true;
   // Apply the theme live as soon as it's changed (before the debounced save).
@@ -42,6 +47,9 @@ async function load() {
   $('gatewayBaseUrl').addEventListener('input', refreshGatewayGrantStatus);
   refreshGrantStatus();
   refreshGatewayGrantStatus();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.settings) renderStudioSection(changes.settings.newValue?.mode || 'studio');
+  });
 
   // Auto-save every field as you edit — no "did it save?" doubt. The explicit
   // Save button stays as a belt-and-suspenders.

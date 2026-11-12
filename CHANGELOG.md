@@ -2,6 +2,10 @@
 
 Older releases are in `git log`.
 
+## 0.7.30 — 2026-11-12
+
+- The options page keeps only real choices: Appearance and the Gateway worker block; the Story Studio connection is shown only outside Gateway mode.
+
 ## 0.7.29 — 2026-11-12
 
 - Removed Fleet Hub entirely.
