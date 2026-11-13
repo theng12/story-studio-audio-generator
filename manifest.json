@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Story Studio Audio Generator",
-  "version": "0.7.32",
+  "version": "0.7.33",
   "description": "Generate organized narration audio from Story Studio KH scripts through compatible web sessions.",
   "permissions": [
     "downloads",
@@ -87,5 +87,6 @@
     "32": "src/icons/icon32.png",
     "48": "src/icons/icon48.png",
     "128": "src/icons/icon128.png"
-  }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuXTjehK+Itu5Yncv4/0EPPcMlZIMgA3+YWGSgIl/+shh3IN0WlhDtNJZf5SQEpI+hC/9RrzMA4ABLzuXyVdqZBymXGsRP2RTU8AudbUAJemZUTaZw53y79ZQBCMy7oAMJ5BQVROCfaRSA04kYmv2tZGmEokbhmzO3COZyw6ALNs8NbNOQFqfwe4Oo+wuzvPOBrjjnkW0Dz+81fiJqD25G9NAdK9SY9TQgUkwKYGz5jGENf7jRJG+u8J4zN+DF+qp9X/ABxrI4F9212wD3Z3p22J3xuYUMhAm1WRiQwJcWZGxCClrGQxILINADdm/fwp+2z0bzjTazKGah9dUbuTGVQIDAQAB"
 }

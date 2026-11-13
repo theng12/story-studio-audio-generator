@@ -2,6 +2,9 @@
 
 Older releases are in `git log`.
 
+## 0.7.33 — 2026-11-13
+- The manifest carries a fixed key, so the extension id and its storage survive versioned folders.
+
 ## 0.7.32 — 2026-11-13
 - Gateway mode can reach the Gateway again: the loopback host permissions are restored, and a test fails if Gateway mode ships without them.
 
