@@ -1,34 +1,34 @@
 # Story Studio Audio Generator
 
-A Chrome extension for turning Story Studio scripts into organized audio files.
+A Chrome extension for turning scripts into organized audio files.
 
 ## What It Does
 
-- Works with scripts from a connected Story Studio project.
-- Lets you choose the sections and voice settings for a batch.
+- Has two modes: **Standalone** (the default) and **Gateway Studio**.
+- Standalone: paste one or more scripts, choose the provider and voice, and save the finished audio to Downloads.
+- Gateway Studio: claim audio jobs from a connected Gateway worker, using the same provider workspace and generation panel.
 - Runs work through a persistent queue with progress, pause, retry, and recovery controls.
-- Saves finished audio back to the connected project workspace.
+- Keeps the exact selected voice and model snapshot with each queued item.
 
 ## Workflow
 
-1. Open the side panel and connect a Story Studio project.
-2. Select an episode, the sections to process, and the available voice settings.
-3. Queue the selected work and monitor its status in the active batch view.
-4. Let the extension save each completed file back to the project workspace.
+1. Open the side panel and choose a mode.
+2. Pick a provider and voice, then load its available choices from a signed-in provider tab.
+3. In Standalone, paste scripts (separate several with a line containing `---`) and queue them; finished files are saved to Downloads.
+4. In Gateway Studio, enable the worker in Settings. Gateway supplies each script, model, and voice.
 
 ## Availability
 
-Audio generation uses supported signed-in provider web sessions; no developer API key is required. The extension discovers the account's available voices, models, controls, and limits and keeps the exact selected voice/model snapshot with each queued item.
+Audio generation uses supported signed-in provider web sessions; no developer API key is required. The extension discovers the account's available voices, models, controls, and limits.
 
 ## Gateway Studio mode
 
-A third mode beside Story Studio and Standalone. The extension claims audio jobs from Gateway
-Studio KH as an outbound worker: it opens no port and is never called by the server.
+Gateway Studio pairs the extension with Gateway Studio KH as an outbound worker: it opens no port and is never called by the server.
 
 - **Pair** with a worker id and token from Gateway's Browser workers pane. Pairing does not arm
   dispatch; dispatch has to be turned on for that worker.
 - **Account identity must be provider-observed and opaque.** The account provider must equal the
-  job's provider (`fish` or `elevenlabs_web`); a Flow credit balance can never authorize an audio
+  job's provider (`fish` or `elevenlabs_web`); a credit balance can never authorize an audio
   job, and an unreadable balance is reported as unknown, never as zero.
 - **An unclaimed quote preview is read-only.** Nothing is enqueued, and no paid request is replayed
   when the outcome is unknown — uncertain work is held for review.
@@ -44,6 +44,5 @@ Studio KH as an outbound worker: it opens no port and is never called by the ser
 
 ## Notes
 
-- Requires a running Story Studio workspace.
+- Requires a signed-in Fish Audio or ElevenLabs web session.
 - The queue is designed to survive closing and reopening the side panel.
-- Remote Story Studio work asks for the password again after a browser restart; queued evidence and generated audio remain available for recovery.

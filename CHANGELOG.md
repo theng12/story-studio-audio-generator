@@ -2,6 +2,12 @@
 
 Older releases are in `git log`.
 
+## 0.7.31 — 2026-11-13
+
+- Only two modes remain: Standalone (the default) and Gateway Studio. The old Story Studio mode and its connection settings are gone.
+- Saved Studio choices move quietly to Standalone, so updates start in the same working mode.
+- Removed the localhost site permission that only the Story Studio server needed.
+
 ## 0.7.30 — 2026-11-12
 
 - The options page keeps only real choices: Appearance and the Gateway worker block; the Story Studio connection is shown only outside Gateway mode.

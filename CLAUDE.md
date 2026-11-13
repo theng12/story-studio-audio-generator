@@ -1,6 +1,6 @@
 # Story Studio Audio Generator (`story-studio-audio-generator`)
 
-MV3 extension for turning Story Studio scripts into audio and saving the results with consistent names.
+MV3 extension for turning scripts into audio and saving the results with consistent names.
 
 ## Public Documentation
 
@@ -8,15 +8,15 @@ Keep `README.md` product-level and provider-neutral. Do not document service-spe
 
 ## Key Areas
 
-- `src/background.js`: queue orchestration, persistence, and saving.
+- `src/background.js`: queue orchestration, persistence, Gateway worker, and saving.
 - `src/content/`: browser-session bridges for compatible services.
-- `src/lib/`: configuration, naming, project integration, and service adapters.
-- `src/popup/`: side panel workflow.
-- `src/options/`: Story Studio connection and output preferences.
+- `src/lib/`: configuration, Gateway client, and service adapters.
+- `src/popup/`: side panel workflow for Standalone and Gateway Studio.
+- `src/options/`: appearance, Gateway worker, and output preferences.
 
 ## Product Boundaries
 
 - Keep the queue durable, observable, and safe to pause or retry.
-- Preserve Story Studio project-folder ingestion.
+- Keep Standalone scripts saving to Downloads and Gateway work returning to its worker.
 - Keep service integrations isolated behind the shared adapter layer.
 - Keep public copy focused on user outcomes, not integration mechanics.

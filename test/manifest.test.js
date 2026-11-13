@@ -12,7 +12,7 @@ test('manifest declares only existing package files', () => {
 
 test('manifest keeps only extension and provider-page permissions', () => {
   assert.deepEqual(manifest.permissions.sort(), ['alarms', 'downloads', 'sidePanel', 'storage', 'tabs']);
-  assert.deepEqual(manifest.host_permissions.sort(), ['http://127.0.0.1/*', 'http://localhost/*', 'https://elevenlabs.io/*', 'https://fish.audio/*']);
+  assert.deepEqual(manifest.host_permissions.sort(), ['https://elevenlabs.io/*', 'https://fish.audio/*']);
   assert.deepEqual(manifest.optional_host_permissions, ['http://*/*', 'https://*/*']);
   assert.doesNotMatch(JSON.stringify(manifest), /api\.fish\.audio|api\.us\.elevenlabs|securetoken\.googleapis/);
 });

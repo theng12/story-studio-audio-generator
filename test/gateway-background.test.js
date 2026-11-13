@@ -65,11 +65,7 @@ async function boot({ local, cache = cacheStorage(), mode = 'gateway', enabled =
   };
   globalThis.caches = cache;
   globalThis.fetch = async (url, init = {}) => {
-    if (mode === 'studio' && url === 'http://localhost:8766/api/projects/fixture/episodes/E01/audio-ingest') {
-      await onSave?.(JSON.parse(init.body));
-      return Response.json({ saved_as: 'fixture.wav', audio_dir: 'fixture' });
-    }
-    assert.equal(new URL(url).origin, 'http://gateway.invalid', 'No network or unmocked Story endpoint allowed.');
+    assert.equal(new URL(url).origin, 'http://gateway.invalid', 'No network or unmocked endpoint allowed.');
     const call = { url, init }; calls.push(call);
     if (url.endsWith('/health')) return Response.json({ ok: true, workerId: 'fixture-audio', kind: 'audio', maxResultBytes: uploadLimit, audioInventoryMaxAgeSeconds: inventoryMaxAgeSeconds, audioInventoryMaxBytes: inventoryMaxBytes });
     if (url.endsWith('/claim')) {
@@ -322,7 +318,7 @@ test('unknown generation and lost claim remain held without replay after restart
 });
 
 test('wrong mode/disabled never claims; missing model/voice and unknown live voice refuse Generate', async () => {
-  for (const mode of ['studio', 'standalone']) {
+  for (const mode of ['standalone']) {
     const worker = await boot({ mode, autoStart: true });
     try { worker.tick(); await worker.settled(); assert.equal(worker.calls.length, 0); }
     finally { worker.restore(); }
@@ -340,39 +336,32 @@ test('wrong mode/disabled never claims; missing model/voice and unknown live voi
   }
 });
 
-for (const mode of ['studio', 'standalone']) {
-  test(`${mode} saves retained audio after a failed save without generating twice or claiming Gateway work`, async () => {
-    const saves = [];
-    const worker = await boot({ mode, onSave(payload) { saves.push(payload); if (saves.length === 1) throw new Error('Fixture save unavailable.'); } });
-    try {
-      const item = {
-        id: 'local-save', text: 'Local fixture narration.', label: 'Fixture', provider: 'elevenlabs_web', voice: 'v1',
-        providerSettings: { model: MODEL, speed: 1, modelMeta: { id: MODEL, label: 'Multilingual v2' } },
-        ...(mode === 'studio'
-          ? { kind: 'script', slug: 'fixture', episodeCode: 'E01', sectionSlug: 'Script', chapterNumber: null }
-          : { kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/fixture.mp3' }),
-      };
-      assert.equal((await worker.send({ type: 'enqueue', items: [item] })).added, 1);
-      await waitFor(() => worker.local.queue?.[0]?.status === 'failed');
-      await worker.settled();
-      assert.equal(worker.cache.rows.size, 1);
-      assert.equal(worker.local.queue[0].phase, 'saving');
-      assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
-      await waitFor(() => worker.local.queue?.[0]?.status === 'done');
-      await worker.settled();
-      assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
-      assert.equal(saves.length, 2);
-      if (mode === 'studio') assert.deepEqual(Buffer.from(saves[1].audioBase64, 'base64'), AUDIO);
-      else {
-        assert.equal(saves[1].filename, 'StoryStudioAudio/Standalone/fixture.wav');
-        assert.deepEqual(Buffer.from(saves[1].url.split(',')[1], 'base64'), AUDIO);
-      }
-      worker.tick(); await worker.settled();
-      assert.equal(worker.calls.length, 0);
-      assert.equal(worker.cache.rows.size, 0);
-    } finally { worker.restore(); }
-  });
-}
+test('standalone saves retained audio after a failed save without generating twice or claiming Gateway work', async () => {
+  const saves = [];
+  const worker = await boot({ mode: 'standalone', onSave(payload) { saves.push(payload); if (saves.length === 1) throw new Error('Fixture save unavailable.'); } });
+  try {
+    const item = {
+      id: 'local-save', kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/fixture.mp3',
+      text: 'Local fixture narration.', label: 'Fixture', provider: 'elevenlabs_web', voice: 'v1',
+      providerSettings: { model: MODEL, speed: 1, modelMeta: { id: MODEL, label: 'Multilingual v2' } },
+    };
+    assert.equal((await worker.send({ type: 'enqueue', items: [item] })).added, 1);
+    await waitFor(() => worker.local.queue?.[0]?.status === 'failed');
+    await worker.settled();
+    assert.equal(worker.cache.rows.size, 1);
+    assert.equal(worker.local.queue[0].phase, 'saving');
+    assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
+    await waitFor(() => worker.local.queue?.[0]?.status === 'done');
+    await worker.settled();
+    assert.equal(worker.provider.filter((entry) => entry.type === 'eleven:generate').length, 1);
+    assert.equal(saves.length, 2);
+    assert.equal(saves[1].filename, 'StoryStudioAudio/Standalone/fixture.wav');
+    assert.deepEqual(Buffer.from(saves[1].url.split(',')[1], 'base64'), AUDIO);
+    worker.tick(); await worker.settled();
+    assert.equal(worker.calls.length, 0);
+    assert.equal(worker.cache.rows.size, 0);
+  } finally { worker.restore(); }
+});
 
 test('Fish verification pauses fresh work without submission, automatic retry or retryFailed replay', async () => {
   const worker = await boot({ mode: 'standalone' });
@@ -404,35 +393,30 @@ test('Fish verification pauses fresh work without submission, automatic retry or
   } finally { worker.restore(); }
 });
 
-for (const mode of ['studio', 'standalone']) {
-  test(`${mode} saves retained Fish bytes while new Fish generation is unavailable`, async () => {
-    const cache = cacheStorage();
-    const artifact = await putAudioArtifact(cache, artifactDescriptor('fish-retained', 'audio/wav'), { base64: AUDIO.toString('base64'), mime: 'audio/wav' });
-    const item = {
-      id: 'fish-retained', status: 'failed', phase: 'saving', artifact,
-      text: 'Do not regenerate.', label: 'Retained Fish', provider: 'fish', voice: 'v1',
-      providerSettings: { model: 'saved-model', modelMeta: { id: 'saved-model', label: 'Saved model' }, sceneDuration: 8 },
-      ...(mode === 'studio'
-        ? { kind: 'script', slug: 'fixture', episodeCode: 'E01', sectionSlug: 'Script', chapterNumber: null }
-        : { kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/retained.wav' }),
-    };
-    const saves = [];
-    const local = { gatewaySettings: { gatewayModeEnabled: false }, queue: [item] };
-    const worker = await boot({ mode, local, cache, onSave: (payload) => saves.push(payload) });
-    try {
-      assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
-      await waitFor(() => worker.local.queue[0].status === 'done');
-      await worker.settled();
-      assert.equal(saves.length, 1);
-      const savedBytes = mode === 'studio' ? saves[0].audioBase64 : saves[0].url.split(',')[1];
-      assert.deepEqual(Buffer.from(savedBytes, 'base64'), AUDIO);
-      assert.deepEqual(worker.local.queue[0].providerSettings, item.providerSettings);
-      assert.equal(worker.provider.length, 0);
-      assert.equal(worker.calls.length, 0);
-      assert.equal(worker.cache.rows.size, 0);
-    } finally { worker.restore(); }
-  });
-}
+test('standalone saves retained Fish bytes while new Fish generation is unavailable', async () => {
+  const cache = cacheStorage();
+  const artifact = await putAudioArtifact(cache, artifactDescriptor('fish-retained', 'audio/wav'), { base64: AUDIO.toString('base64'), mime: 'audio/wav' });
+  const item = {
+    id: 'fish-retained', status: 'failed', phase: 'saving', artifact,
+    kind: 'paste', target: 'download', downloadPath: 'StoryStudioAudio/Standalone/retained.wav',
+    text: 'Do not regenerate.', label: 'Retained Fish', provider: 'fish', voice: 'v1',
+    providerSettings: { model: 'saved-model', modelMeta: { id: 'saved-model', label: 'Saved model' }, sceneDuration: 8 },
+  };
+  const saves = [];
+  const local = { gatewaySettings: { gatewayModeEnabled: false }, queue: [item] };
+  const worker = await boot({ mode: 'standalone', local, cache, onSave: (payload) => saves.push(payload) });
+  try {
+    assert.equal((await worker.send({ type: 'retryFailed', id: item.id })).retried, 1);
+    await waitFor(() => worker.local.queue[0].status === 'done');
+    await worker.settled();
+    assert.equal(saves.length, 1);
+    assert.deepEqual(Buffer.from(saves[0].url.split(',')[1], 'base64'), AUDIO);
+    assert.deepEqual(worker.local.queue[0].providerSettings, item.providerSettings);
+    assert.equal(worker.provider.length, 0);
+    assert.equal(worker.calls.length, 0);
+    assert.equal(worker.cache.rows.size, 0);
+  } finally { worker.restore(); }
+});
 
 test('listed Fish models cannot authorize a Gateway claim while verification is unavailable', async () => {
   const worker = await boot({ inventoryReply: { ok: false, error: 'Other provider unavailable.' } });

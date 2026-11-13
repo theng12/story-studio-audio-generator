@@ -1,9 +1,10 @@
 // Account-worker schema 1 for the audio worker.
 //
 // Audio has no observed credit source, so a balance is always null (unknown)
-// and must never be rendered as 0. `nzlxg` is Flow's credit RPC and can never
-// authorize a fish.audio or ElevenLabs job: the Gateway binds the account to
-// the job's provider. A real Fish/ElevenLabs balance capture replaces this.
+// and must never be rendered as 0. Flow is never called here, so a Flow credit
+// RPC cannot authorize a fish.audio or ElevenLabs job either: the Gateway binds
+// the account to the job's provider. A real Fish/ElevenLabs balance capture
+// replaces this.
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 const SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 

@@ -1,59 +1,40 @@
 import {
   getSettings,
   saveSettings,
-  getCredentials,
   getGatewayCredentials,
-  saveCredentials,
   saveGatewayCredentials,
   DEFAULTS,
 } from '../lib/config.js';
-import { StudioClient } from '../lib/story-studio.js';
 import { initTheme, setTheme } from '../lib/theme.js';
 
 const $ = (id) => document.getElementById(id);
 // Fields that have an input on THIS page. (The voice lives in the side panel,
 // not here — don't list fishVoice or $(f) is null and load() aborts before the
 // buttons are wired.)
-const FIELDS = ['theme', 'studioBaseUrl', 'gatewayBaseUrl'];
+const FIELDS = ['theme', 'gatewayBaseUrl'];
 const CHECKBOX_FIELDS = ['gatewayModeEnabled'];
 
 const COLOR = { ok: '#0a7a0a', warn: '#b56b00', err: '#b00', muted: 'var(--muted)' };
 
-function renderStudioSection(mode) {
-  $('studioSection').hidden = mode === 'gateway';
-}
-
 async function load() {
   await initTheme();
   const s = await getSettings();
-  renderStudioSection(s.mode);
   for (const f of FIELDS) if ($(f)) $(f).value = s[f] ?? DEFAULTS[f] ?? '';
   for (const f of CHECKBOX_FIELDS) if ($(f)) $(f).checked = s[f] === true;
   // Apply the theme live as soon as it's changed (before the debounced save).
   $('theme').addEventListener('change', () => setTheme($('theme').value));
-  const cred = await getCredentials();
-  $('studioUsername').value = cred.username || '';
-  $('studioPassword').value = cred.password || '';
   const gwCreds = await getGatewayCredentials();
   $('gatewayWorkerToken').value = gwCreds.token || '';
   $('gatewayWorkerId').value = gwCreds.workerId || '';
   $('save').addEventListener('click', save);
-  $('login').addEventListener('click', login);
-  $('grantAccess').addEventListener('click', grantAccess);
-  $('testConnection').addEventListener('click', testConnection);
   $('grantGateway').addEventListener('click', grantGateway);
   $('testGateway').addEventListener('click', testGateway);
-  $('studioBaseUrl').addEventListener('input', refreshGrantStatus);
   $('gatewayBaseUrl').addEventListener('input', refreshGatewayGrantStatus);
-  refreshGrantStatus();
   refreshGatewayGrantStatus();
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'sync' && changes.settings) renderStudioSection(changes.settings.newValue?.mode || 'studio');
-  });
 
   // Auto-save every field as you edit — no "did it save?" doubt. The explicit
   // Save button stays as a belt-and-suspenders.
-  const allFields = [...FIELDS, ...CHECKBOX_FIELDS, 'studioUsername', 'studioPassword'];
+  const allFields = [...FIELDS, ...CHECKBOX_FIELDS];
   for (const id of allFields) {
     const el = $(id);
     if (!el) continue;
@@ -87,10 +68,6 @@ async function save() {
       token: $('gatewayWorkerToken').value,
       workerId: $('gatewayWorkerId').value.trim(),
     });
-    await saveCredentials({
-      username: $('studioUsername').value.trim(),
-      password: $('studioPassword').value, // not trimmed — passwords may have spaces
-    });
     chrome.runtime.sendMessage({ type: 'refreshGatewayAgent' }).catch(() => {});
     showSaved();
   } catch (e) {
@@ -103,31 +80,8 @@ async function save() {
   }
 }
 
-async function login() {
-  const status = $('loginStatus');
-  const url = $('studioBaseUrl').value.trim();
-  const username = $('studioUsername').value.trim();
-  const password = $('studioPassword').value;
-  status.textContent = 'Signing in…';
-  status.style.color = COLOR.muted;
-  if (!url) {
-    status.textContent = 'Enter a Server URL first.';
-    status.style.color = COLOR.err;
-    return;
-  }
-  try {
-    await saveCredentials({ username, password });
-    await new StudioClient(url).login(username, password);
-    status.textContent = '✓ Signed in — this browser session is ready.';
-    status.style.color = COLOR.ok;
-  } catch (error) {
-    status.textContent = `Sign-in failed: ${error.message}`;
-    status.style.color = COLOR.err;
-  }
-}
-
-// ── Host-permission self-grant (so a remote/Tailscale server works without a
-// hardcoded whitelist — the user authorizes their own server URL at runtime). ──
+// ── Host-permission self-grant (so a Gateway on any host works without a
+// hardcoded whitelist — the user authorizes their own URL at runtime). ──
 function originPattern(url) {
   try {
     const u = new URL(url);
@@ -143,91 +97,6 @@ function isLocalUrl(url) {
     return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
   } catch {
     return false;
-  }
-}
-
-async function refreshGrantStatus() {
-  const el = $('grantStatus');
-  const btn = $('grantAccess');
-  const url = $('studioBaseUrl').value.trim();
-  const pat = originPattern(url);
-  if (!pat) {
-    el.textContent = '';
-    return;
-  }
-  if (isLocalUrl(url)) {
-    el.textContent = 'Local — no grant needed.';
-    el.style.color = COLOR.muted;
-    btn.disabled = true;
-    return;
-  }
-  btn.disabled = false;
-  const granted = await chrome.permissions.contains({ origins: [pat] }).catch(() => false);
-  el.textContent = granted ? '✓ Access granted' : 'Not granted — click to grant.';
-  el.style.color = granted ? COLOR.ok : COLOR.warn;
-}
-
-async function grantAccess() {
-  const url = $('studioBaseUrl').value.trim();
-  const pat = originPattern(url);
-  const el = $('grantStatus');
-  if (!pat) {
-    el.textContent = 'Enter a valid Server URL first.';
-    el.style.color = COLOR.err;
-    return;
-  }
-  if (isLocalUrl(url)) return refreshGrantStatus();
-  try {
-    const granted = await chrome.permissions.request({ origins: [pat] });
-    if (!granted) {
-      el.textContent = 'Permission declined.';
-      el.style.color = COLOR.err;
-      return;
-    }
-    // Quick reachability test so the user knows the URL/permission combo works.
-    el.textContent = '✓ Granted — testing…';
-    el.style.color = COLOR.ok;
-    try {
-      await new StudioClient(url).listProjects();
-      el.textContent = '✓ Access granted, server reachable.';
-    } catch (e) {
-      el.textContent = `✓ Granted, but server not reachable yet (${e.message}). Check it's running + you're logged in.`;
-      el.style.color = COLOR.warn;
-    }
-  } catch (e) {
-    el.textContent = `Grant failed: ${e.message}`;
-    el.style.color = COLOR.err;
-  }
-}
-
-// Explicit "does it work?" test against the current URL.
-async function testConnection() {
-  const url = $('studioBaseUrl').value.trim();
-  const el = $('testStatus');
-  el.style.color = COLOR.muted;
-  el.textContent = 'Testing…';
-  if (!url) {
-    el.textContent = 'Enter a Server URL first.';
-    el.style.color = COLOR.err;
-    return;
-  }
-  if (!isLocalUrl(url)) {
-    const pat = originPattern(url);
-    const granted = pat && (await chrome.permissions.contains({ origins: [pat] }).catch(() => false));
-    if (!granted) {
-      el.textContent = 'Grant access first (button above), then test.';
-      el.style.color = COLOR.warn;
-      return;
-    }
-  }
-  try {
-    const projects = await new StudioClient(url).listProjects();
-    el.textContent = `✓ Connected — ${projects.length} project(s) found.`;
-    el.style.color = COLOR.ok;
-  } catch (e) {
-    const tail = isLocalUrl(url) ? 'Is Story Studio running?' : 'Running, granted, and logged in?';
-    el.textContent = `✗ Not reachable: ${e.message}. ${tail}`;
-    el.style.color = COLOR.err;
   }
 }
 

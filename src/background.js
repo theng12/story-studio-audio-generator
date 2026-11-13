@@ -1,18 +1,14 @@
 // Service worker — a persistent, resumable generation QUEUE.
 //
-// The panel enqueues work (a section, a whole episode, or a whole project);
-// this worker processes one item at a time, human-paced, writing each result
-// to the Story Studio project folder. The queue lives in
+// The panel enqueues work (standalone scripts), this worker processes one item
+// at a time, human-paced, saving each result to Downloads. The queue lives in
 // chrome.storage, so it survives the panel closing AND the worker being
 // killed: a chrome.alarms tick wakes the worker to resume any pending items.
 //
 // Strictly sequential — only ever one fish.audio generation in flight, so the
 // site is never flooded no matter how much you queue.
 
-import { getCredentials, getGatewayCredentials, getSettings, getProviderSettings, isLocalStudioUrl, providerCooldown, requiresStudioPassword } from './lib/config.js';
-import { StudioClient } from './lib/story-studio.js';
-import { sectionSlugFromFile } from './lib/naming.js';
-import { sectionEligibility, storyStudioSection } from './lib/section-contracts.js';
+import { getGatewayCredentials, getSettings, getProviderSettings, providerCooldown } from './lib/config.js';
 import { PROVIDERS, assertProviderSettingsSnapshot, buildElevenVoiceSettings, createElevenInventory, createFishInventory } from './lib/providers.js';
 import { artifactDescriptor, artifactsForDiscardedItems, deleteAudioArtifact, deleteAudioArtifacts, getAudioArtifact, putAudioArtifact, sweepOrphanedAudioArtifacts } from './lib/audio-artifacts.js';
 import { RECOVERY_REVIEW_MESSAGE, canHandleInFlightFailure, isAmbiguousBridgeFailure, markGeneratedAudioPersistenceFailure, recoverQueueAfterRestart, retryQueueItem, workKindForQueueItem } from './lib/queue-recovery.js';
@@ -174,47 +170,6 @@ async function produceAudio(job, settings) {
   });
 }
 
-// Save already-generated audio; retries of this function never call a provider.
-async function saveAudio(job, { base64, mime }, settings) {
-  const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
-  if (!job.slug || !job.episodeCode || !job.sectionSlug) {
-    throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
-  }
-  const contract = storyStudioSection(job.sectionSlug);
-  if (!contract || contract.chapterNumber !== job.chapterNumber) {
-    throw new Error('Unsupported Story Studio section; audio was not sent to Story Studio.');
-  }
-  const base = (settings.studioBaseUrl || '').replace(/\/+$/, '');
-  const url = `${base}/api/projects/${encodeURIComponent(job.slug)}/episodes/${encodeURIComponent(
-    job.episodeCode
-  )}/audio-ingest`;
-  const res = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      slug: job.sectionSlug,
-      chapterNumber: job.chapterNumber,
-      audioBase64: base64,
-      format: ext,
-    }),
-  });
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.json();
-      if (j?.detail) detail = j.detail;
-    } catch {
-      /* non-JSON */
-    }
-    const error = new Error(`Story Studio rejected the audio: ${detail}`);
-    error.status = res.status;
-    throw error;
-  }
-  const j = await res.json();
-  return { savedAs: j.saved_as, savedIn: j.audio_dir };
-}
-
 async function startDownload(job, { base64, mime }) {
   const ext = mime === 'audio/wav' ? 'wav' : 'mp3';
   const filename = `${String(job.downloadPath || 'StoryStudioAudio/Standalone/audio.mp3').replace(/\.(mp3|wav)$/i, '')}.${ext}`;
@@ -333,23 +288,18 @@ async function setQueuePaused(paused) {
 }
 
 let _seq = 0;
-function mkItem(o) {
-  return { id: `${Date.now()}_${_seq++}`, status: 'pending', ...o };
-}
 
 let processing = false;
 
-// Identity of a Story Studio section, used to dedupe (so a double-click — or
-// re-queuing an episode — can't add the same chapter twice and waste credits).
+// Identity of a queued item, used to dedupe (so a double-click can't add the
+// same script twice and waste credits).
 function itemKey(it) {
   if (it?.kind === 'paste' && it.text) return `paste::${it.label || ''}::${it.text}`;
-  return it.episodeCode && it.sectionSlug ? `${it.episodeCode}::${it.sectionSlug}` : null;
+  return null;
 }
 
-function isStudioQueueItem(item) {
-  if (item?.kind === 'paste') return typeof item.text === 'string' && item.target === 'download';
-  const contract = item?.sectionSlug ? storyStudioSection(item.sectionSlug) : null;
-  return !!(item?.slug && item?.episodeCode && contract && item.kind === contract.kind && item.chapterNumber === contract.chapterNumber);
+function isStandaloneQueueItem(item) {
+  return item?.kind === 'paste' && typeof item.text === 'string' && item.target === 'download';
 }
 
 async function enqueue(items) {
@@ -373,7 +323,7 @@ async function enqueue(items) {
   let added = 0;
   let skipped = 0;
   for (const it of items) {
-    if (!isStudioQueueItem(it)) {
+    if (!isStandaloneQueueItem(it)) {
       skipped++;
       continue;
     }
@@ -403,105 +353,11 @@ async function removeFromQueue(id) {
   return { ok: true };
 }
 
-// Expand a whole project into queue items (done worker-side so the panel stays
-// snappy). One item per missing section (intro + chapters) of every episode
-// whose script is done but audio isn't.
-async function enqueueProject({ slug, voice, autoTag, provider, providerSettings }) {
-  const settings = await getSettings();
-  const ps = providerSettings || getProviderSettings(settings, provider);
-  const client = new StudioClient(settings.studioBaseUrl);
-  const raw = await client.listEpisodes(slug);
-  const eps = (Array.isArray(raw) ? raw : raw.episodes || []).filter(
-    (e) => e.status?.script && !e.status?.audio
-  );
-  const items = [];
-  let unsupported = 0;
-  for (const ep of eps) {
-    const code = ep.episode_code || ep.code;
-    let audio;
-    try {
-      audio = await client.audioStatus(slug, code);
-    } catch {
-      continue;
-    }
-    const { items: missingItems, unsupported: unsupportedItems } = missingSectionItems(audio.missing_files, { slug, code, title: ep.title || '', voice, autoTag, provider, providerSettings: ps });
-    unsupported += unsupportedItems.length;
-    for (const it of missingItems) {
-      items.push(it);
-    }
-  }
-  return enqueue(items).then((r) => ({ ...r, episodes: eps.length, unsupported }));
-}
-
-// Build queue items from an audio-status missing_files list.
-//
-// missing_files is authoritative but lists one file PER CHUNK, so a chunked
-// chapter appears as several `_partN` names. Map each back to its section and
-// dedupe: two missing parts of Chapter 3 collapse to ONE `Chapter_03` job,
-// which regenerates the section and fills every missing part at once.
-function missingSectionItems(missingFiles, { slug, code, title, voice, autoTag, provider, providerSettings }) {
-  const items = [];
-  const unsupported = [];
-  const seen = new Set();
-  for (const f of missingFiles || []) {
-    const section = sectionSlugFromFile(f, code);
-    if (!section || seen.has(section)) continue;
-    const eligibility = sectionEligibility(section);
-    if (!eligibility.supported) { unsupported.push(eligibility); continue; }
-    seen.add(section);
-    const num = eligibility.chapterNumber;
-    items.push(
-      mkItem({
-        kind: eligibility.kind,
-        slug,
-        episodeCode: code,
-        episodeTitle: title,
-        sectionSlug: eligibility.sectionSlug,
-        chapterNumber: num,
-        provider,
-        voice,
-        autoTag,
-        providerSettings,
-        label: `${code} ${eligibility.kind === 'script' ? 'Script' : eligibility.kind === 'intro' ? 'Introduction' : 'Ch ' + num}`,
-      })
-    );
-  }
-  return { items, unsupported };
-}
-
-async function fetchItemText(item, client) {
-  if (item.text) return item.text;
-  if (!item.slug || !item.episodeCode) {
-    throw new Error('Queue item is not linked to a Story Studio section. Queue it again from Story Studio.');
-  }
-  if (item.kind === 'intro') {
-    const sc = await client.scriptContent(item.slug, item.episodeCode, item.episodeTitle);
-    return sc?.introduction?.content || '';
-  }
-  if (item.kind === 'script') {
-    const script = await client.scriptContent(item.slug, item.episodeCode, item.episodeTitle);
-    return script?.content || '';
-  }
-  const res = await client.chapterContent(item.slug, item.episodeCode, item.chapterNumber, item.episodeTitle);
-  return res.content || res.text || '';
-}
-
-async function preflightStudioPassword(item, settings) {
-  if (item.target === 'download' || !item.slug || isLocalStudioUrl(settings.studioBaseUrl)) return false;
-  const { password } = await getCredentials();
-  if (!requiresStudioPassword(item, settings, password)) return false;
-  await setQueuePaused(true);
-  alarmClear();
-  await writeStatus('Story Studio password required — open Settings to sign in again.', 'info');
-  return true;
-}
-
 async function processQueue() {
   if (processing) return;
   processing = true;
   try {
     let settings = await getSettings();
-    const client = new StudioClient(settings.studioBaseUrl);
     for (;;) {
       if (await isPaused()) {
         await writeStatus('Queue paused — press Resume to continue.', 'info');
@@ -537,7 +393,6 @@ async function processQueue() {
         await writeStatus(`${q[currentIdx].label}: ${RECOVERY_REVIEW_MESSAGE}`, 'info');
         continue;
       }
-      if (await preflightStudioPassword(q[currentIdx], settings)) return;
       q[currentIdx].status = 'running';
       q[currentIdx].startedAt = Date.now();
       delete q[currentIdx].finishedAt;
@@ -553,12 +408,8 @@ async function processQueue() {
           voice: item.voice,
           autoTag: item.autoTag,
           providerSettings: item.providerSettings,
-          slug: item.slug,
-          episodeCode: item.episodeCode,
-          sectionSlug: item.sectionSlug,
-          chapterNumber: item.chapterNumber,
           label: item.label,
-          target: item.target || 'project',
+          target: item.target,
           downloadPath: item.downloadPath,
         };
         let r;
@@ -570,8 +421,8 @@ async function processQueue() {
             audio = await getAudioArtifact(caches, item.artifact);
             if (!audio) throw Object.assign(new Error(`${RECOVERY_REVIEW_MESSAGE} The saved audio artifact is no longer available.`), { ambiguous: true });
           } else {
-            const text = await fetchItemText(item, client);
-            if (!text.trim()) throw new Error('no script text on disk');
+            const text = item.text || '';
+            if (!text.trim()) throw new Error('no script text to generate');
             job.text = text;
             audio = await produceAudio(job, settings);
             try {
@@ -619,7 +470,7 @@ async function processQueue() {
             }
             r = await observeDownload(started.downloadId);
           } else {
-            r = await saveAudio(job, audio, settings);
+            throw new Error('Only Downloads targets are supported.');
           }
         }
         q = await getQueue();
@@ -645,17 +496,6 @@ async function processQueue() {
         q = await getQueue();
         const it = q.find((i) => i.id === item.id);
         if (!canHandleInFlightFailure(it)) continue;
-        if (it && e?.status === 401) {
-          const preserveArtifact = it.phase === 'saving' && it.artifact;
-          it.status = 'pending';
-          delete it.startedAt; delete it.finishedAt; delete it.durationMs;
-          if (!preserveArtifact) delete it.phase;
-          await setQueue(q);
-          await setQueuePaused(true);
-          alarmClear();
-          await writeStatus('Story Studio password required — open Settings to sign in again.', 'info');
-          return;
-        }
         if (it && e?.ambiguous) {
           it.status = 'failed';
           it.error = String(e.message || RECOVERY_REVIEW_MESSAGE);
@@ -1106,9 +946,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return true;
     case 'removeItem':
       reply(removeFromQueue(msg.id));
-      return true;
-    case 'enqueueProject':
-      reply(enqueueProject(msg.payload));
       return true;
     case 'clearQueue':
       reply(clearQueue());

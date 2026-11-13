@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { sectionEligibility, storyStudioSection } from '../src/lib/section-contracts.js';
 import { readFileSync } from 'node:fs';
 
 function storageArea(initial = {}) {
@@ -23,57 +22,34 @@ function storageArea(initial = {}) {
   };
 }
 
-test('startup migrates legacy local credentials without invoking login or getCredentials', async () => {
-  const sync = storageArea({ settings: { studioBaseUrl: 'https://studio.example.test', theme: 'dark' } });
-  const local = storageArea({ studioCredentials: { username: 'alice', password: 'legacy-secret' } });
-  const session = storageArea();
-  globalThis.chrome = { storage: { sync, local, session } };
-  const { getSettings } = await import('../src/lib/config.js');
-
-  const settings = await getSettings();
-
-  assert.equal(settings.studioBaseUrl, 'https://studio.example.test');
-  assert.equal(settings.studioUsername, 'alice');
-  assert.deepEqual(local.values, { studioBaseUrl: 'https://studio.example.test', studioUsername: 'alice' });
-  assert.deepEqual(session.values, { studioPassword: 'legacy-secret' });
-  assert.deepEqual(sync.values.settings, { theme: 'dark', mode: 'studio' });
-});
-
-test('repeated startup migration leaves no legacy credential or new writes', async () => {
-  const sync = storageArea({ settings: { theme: 'dark' } });
-  const local = storageArea({ studioBaseUrl: 'https://studio.example.test', studioCredentials: { username: 'alice', password: 'legacy-secret' } });
-  const session = storageArea();
-  globalThis.chrome = { storage: { sync, local, session } };
-  const { getSettings } = await import('../src/lib/config.js');
-
-  await getSettings();
-  const before = { local: { ...local.calls }, session: { ...session.calls }, sync: { ...sync.calls } };
-  await getSettings();
-
-  assert.deepEqual(local.values, { studioBaseUrl: 'https://studio.example.test', studioUsername: 'alice' });
-  assert.deepEqual(session.values, { studioPassword: 'legacy-secret' });
-  assert.deepEqual(local.calls, { get: before.local.get + 1, set: before.local.set, remove: before.local.remove });
-  assert.deepEqual(session.calls, { get: before.session.get + 1, set: before.session.set, remove: before.session.remove });
-  assert.deepEqual(sync.calls, { get: before.sync.get + 1, set: before.sync.set, remove: before.sync.remove });
-});
-
-test('startup returns a username migrated from legacy sync settings', async () => {
-  const sync = storageArea({ settings: { studioBaseUrl: 'https://studio.example.test', studioUsername: 'alice' } });
+test('stored Studio and unknown modes migrate silently to Standalone', async () => {
+  const sync = storageArea({ settings: { mode: 'studio', theme: 'dark' } });
   const local = storageArea();
-  const session = storageArea();
-  globalThis.chrome = { storage: { sync, local, session } };
-  const { getSettings } = await import('../src/lib/config.js');
+  globalThis.chrome = { storage: { sync, local } };
+  const { getSettings, DEFAULTS } = await import('../src/lib/config.js');
 
+  assert.equal(DEFAULTS.mode, 'standalone');
   const settings = await getSettings();
+  assert.equal(settings.mode, 'standalone');
+  assert.deepEqual(sync.values.settings, { mode: 'standalone', theme: 'dark' });
 
-  assert.equal(settings.studioUsername, 'alice');
-  assert.equal(local.values.studioUsername, 'alice');
+  sync.values.settings = { mode: 'something-else' };
+  const unknown = await getSettings();
+  assert.equal(unknown.mode, 'standalone');
+  assert.deepEqual(sync.values.settings, { mode: 'standalone' });
 });
 
-test('accepts whole script, introduction, and numbered chapter contracts', () => {
-  assert.deepEqual(storyStudioSection('Script'), { kind: 'script', sectionSlug: 'Script', chapterNumber: null });
-  assert.deepEqual(storyStudioSection('Introduction'), { kind: 'intro', sectionSlug: 'Introduction', chapterNumber: null });
-  assert.deepEqual(storyStudioSection('Chapter_03'), { kind: 'chapter', sectionSlug: 'Chapter_03', chapterNumber: 3 });
+test('no shipped source accepts the removed Studio mode', () => {
+  for (const file of [
+    '../src/lib/config.js',
+    '../src/background.js',
+    '../src/popup/popup.js',
+    '../src/popup/popup.html',
+    '../src/options/options.js',
+    '../src/options/options.html',
+  ]) {
+    assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), 'utf8'), /['"]studio['"]/, file);
+  }
 });
 
 test('generation has no provider-default model or voice fallback', () => {
@@ -86,26 +62,12 @@ test('generation has no provider-default model or voice fallback', () => {
   assert.doesNotMatch(eleven, /model \|\| MODEL/);
 });
 
-test('Story Studio boundaries are enforced', async () => {
-  const background = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
-  const popup = readFileSync(new URL('../src/popup/popup.js', import.meta.url), 'utf8');
-  const options = readFileSync(new URL('../src/options/options.html', import.meta.url), 'utf8');
-  assert.match(popup, /sectionEligibility\(s\)/);
-  assert.match(background, /storyStudioSection\(item\.sectionSlug\)/);
-  assert.match(background, /Unsupported Story Studio section/);
-  assert.match(background, /if \(await preflightStudioPassword\(q\[currentIdx\], settings\)\) return;/);
-  assert.doesNotMatch(background, /case 'retry_failed'/);
-  assert.match(options, /browser session only/);
-  const { StudioClient } = await import('../src/lib/story-studio.js');
-  assert.equal(typeof StudioClient.prototype.whoami, 'undefined');
-});
-
 test('release metadata documents cleanup without stale claims', () => {
   const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
   assert.equal(changelog.match(/^## (\d+\.\d+\.\d+)/m)?.[1], manifest.version);
-  assert.match(changelog, /^## 0\.7\.26 - Audio Generator cleanup/m);
+  assert.match(changelog, /^## 0\.7\.31 — /m);
   assert.match(readme, /signed-in provider web sessions/i);
   assert.doesNotMatch(readme, /api\.fish\.audio|api\.us\.elevenlabs|securetoken\.googleapis|Coming soon/i);
 });
@@ -116,22 +78,12 @@ test('Fleet Hub is fully removed', () => {
   }
 });
 
-test('options page has no Flow ids and hides the Story Studio connection in Gateway mode', () => {
+test('options page keeps only appearance and Gateway; the panel offers two modes', () => {
   const html = readFileSync(new URL('../src/options/options.html', import.meta.url), 'utf8');
-  const options = readFileSync(new URL('../src/options/options.js', import.meta.url), 'utf8');
+  const popup = readFileSync(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
   assert.doesNotMatch(html, /flowWorkspaceUrl|grantFlow|flowGrantStatus/);
-  assert.match(html, /id="studioSection"/);
-  assert.match(options, /\$\('studioSection'\)\.hidden = mode === 'gateway'/);
-});
-
-test('keeps an unknown missing section visible but unsupported', () => {
-  assert.deepEqual(sectionEligibility('Appendix_A'), {
-    supported: false,
-    sectionSlug: 'Appendix_A',
-    kind: 'unsupported',
-    chapterNumber: null,
-    reason: 'Unsupported Story Studio section "Appendix_A". Choose the whole script, Introduction, or a numbered chapter.',
-  });
-  assert.equal(storyStudioSection('Chapter_0'), null);
-  assert.equal(storyStudioSection('Chapter_abc'), null);
+  assert.doesNotMatch(html, /studioSection|studioBaseUrl|studioUsername|studioPassword|grantAccess|testConnection|loginStatus/);
+  assert.match(html, /id="gatewayModeEnabled"/);
+  assert.match(popup, /<option value="standalone">/);
+  assert.match(popup, /<option value="gateway">/);
 });

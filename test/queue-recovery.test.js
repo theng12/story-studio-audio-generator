@@ -63,7 +63,7 @@ test('restart observes an existing download and quarantines a download without a
 
 test('retry keeps a saved artifact in the save-only path and refuses uncertain work', () => {
   const artifact = artifactDescriptor('save-failed', 'audio/mpeg');
-  assert.deepEqual(retryQueueItem({ id: 'save-failed', status: 'failed', phase: 'saving', artifact, attempts: 2, error: 'Studio offline' }), {
+  assert.deepEqual(retryQueueItem({ id: 'save-failed', status: 'failed', phase: 'saving', artifact, attempts: 2, error: 'Provider offline' }), {
     id: 'save-failed', status: 'pending', phase: 'saving', artifact, attempts: 0,
   });
   assert.equal(retryQueueItem({ id: 'unknown', status: 'failed', ambiguous: true, requiresLocalReview: true }), null);

@@ -61,7 +61,6 @@
 
     <label class="workflow-mode"><span>Mode</span>
       <select id="workingMode" aria-label="Working mode">
-        <option value="studio">Story Studio</option>
         <option value="standalone">Standalone</option>
         <option value="gateway">Gateway Studio</option>
       </select>
@@ -187,42 +186,6 @@
       </section>
     </details>
 
-    <!-- Pick from a running Story Studio server -->
-    <section id="studioPane">
-      <div class="studio-connection">
-        <span id="connStatus" class="connection-status" role="status" aria-live="polite"></span>
-        <div class="studio-connection-actions">
-          <button id="openStudioSettings" class="workspace-action" type="button" hidden>Update Studio URL</button>
-          <button id="testConn" class="workspace-action" type="button">Test Studio connection</button>
-        </div>
-      </div>
-      <div class="form-grid form-grid-two">
-        <label>Project
-          <select id="project"></select>
-        </label>
-        <label>Episode <span class="muted" id="episodeHint">(audio missing)</span>
-          <select id="episode"></select>
-        </label>
-      </div>
-      <label class="check">
-        <input type="checkbox" id="showDoneEpisodes" />
-        Show episodes that already have all audio
-      </label>
-      <label class="check">
-        <input type="checkbox" id="includeExisting" />
-        Include chapters that already have audio (re-voice)
-      </label>
-
-      <div class="row between section-head">
-        <span class="muted" id="sectionsSummary">Chapters / Intro</span>
-        <div class="hgroup">
-          <button id="reloadSections" class="link small" title="Re-pull chapters + audio status from Story Studio">⟳ Reload</button>
-          <label class="check"><input type="checkbox" id="selectAll" /> all</label>
-        </div>
-      </div>
-      <div id="sectionList" class="sectionlist"></div>
-    </section>
-
     <section id="standalonePane" hidden>
       <div id="standaloneEditor" class="standalone-editor">
         <label>Audio label
@@ -249,13 +212,6 @@
       Auto-tag emotions &amp; pauses (Fish "Auto Tag All")
     </label>
 
-    <div id="studioBatchActions" class="batch-actions">
-      <button id="queueSelected" class="primary">Queue selected</button>
-      <div class="batch-secondary">
-        <button id="queueEpisode">Queue this episode</button>
-        <button id="queueProject">Queue all pending</button>
-      </div>
-    </div>
     <p id="status" class="muted"></p>
 
     <!-- What's new — renders CHANGELOG.md packaged with the extension -->

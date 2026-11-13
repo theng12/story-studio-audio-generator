@@ -1,8 +1,5 @@
-import { getSettings, saveSettings, getCredentials, getProviderSettings, PROVIDER_SETTING_DEFAULTS, providerCooldown } from '../lib/config.js';
+import { getSettings, saveSettings, getProviderSettings, PROVIDER_SETTING_DEFAULTS, providerCooldown } from '../lib/config.js';
 import { initTheme } from '../lib/theme.js';
-import { StudioClient } from '../lib/story-studio.js';
-import { sectionSlugFromFile } from '../lib/naming.js';
-import { sectionEligibility } from '../lib/section-contracts.js';
 import { ELEVEN_FALLBACK_MODELS, ELEVEN_STABILITY_MODES, FISH_FALLBACK_MODELS, PROVIDERS, modelMetaNeedsSync, modelsForProviderSettings, resolveElevenModel, resolveFishModel, snapshotProviderSettings, snapshotProviderJob } from '../lib/providers.js';
 import { retryQueueItem } from '../lib/queue-recovery.js';
 
@@ -20,22 +17,11 @@ function rememberVoice(voice) {
 }
 
 let settings;
-let client; // StudioClient for the connected Story Studio workspace
 let queueState = { queue: [], paused: false };
 let liveStatus = null; // last persisted status (may carry a live countdown)
-let ctx = {}; // { project, projectSlug, episodeCode, episodeTitle }
-let episodesByProject = {}; // slug -> [episode objects with .status]
-let currentSections = []; // [{ slug, kind, num, label, present }] for the section list
-let studioConnectionTest = null;
-const STUDIO_CONNECTION_TEST_KEY = 'studioConnectionTest';
 let standaloneScripts = [];
 let providerInventories = {};
 let syncingElevenModel = '';
-
-// An episode is worth showing when its script is done and (audio is missing, or
-// the user asked to also see already-done episodes for re-voicing).
-const isEligible = (ep) =>
-  !!(ep.status && ep.status.script && (settings?.showDoneEpisodes || !ep.status.audio));
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -50,7 +36,6 @@ async function init() {
   renderWorkingMode();
   $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('workingMode').addEventListener('change', changeWorkingMode);
-  $('openStudioSettings').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('openProviderPage').addEventListener('click', onOpenProviderPage);
   $('loadVoices').addEventListener('click', () => refreshInventory(true));
   await initInventory();
@@ -118,7 +103,6 @@ async function init() {
   setInterval(() => {
     tickCountdown();
     renderActivityElapsed();
-    renderConnectionStatus();
   }, 1000);
   const renderGatewayStatus = (state) => {
     $('gatewayStatus').textContent = state?.error || (state?.phase === 'generating' ? 'Generating audio for Gateway.' : state?.phase === 'uploading' ? 'Delivering retained audio to Gateway.' : state?.lastJob ? 'Audio delivered to Gateway.' : state?.idle ? 'Waiting for Gateway audio jobs.' : 'Connection has not been checked.') + (state?.balance ? ` Balance: ${state.balance}.` : '');
@@ -147,47 +131,17 @@ async function init() {
       renderQueueUI();
     }
     if (changes.queue) {
-      const oldQ = changes.queue.oldValue || [];
       queueState.queue = changes.queue.newValue || [];
-      onQueueChanged(oldQ, queueState.queue);
+      renderQueueUI();
     }
   });
 
-  await restoreConnectionStatus();
-  $('queueSelected').addEventListener('click', onQueueSelected);
-  $('queueEpisode').addEventListener('click', onQueueEpisode);
-  $('queueProject').addEventListener('click', onQueueProject);
-  $('reloadSections').addEventListener('click', onReloadSections);
   $('reviewStandalone').addEventListener('click', reviewStandaloneScripts);
   $('editStandalone').addEventListener('click', showStandaloneEditor);
   $('queueStandalone').addEventListener('click', onQueueStandalone);
   $('standaloneText').addEventListener('input', () => {
     if (standaloneScripts.length) showStandaloneEditor();
   });
-  $('testConn').addEventListener('click', testConnection);
-  $('selectAll').addEventListener('change', (e) => {
-    $('sectionList')
-      .querySelectorAll('input[type=checkbox]')
-      .forEach((c) => {
-        if (!c.disabled) c.checked = e.target.checked;
-      });
-    updateSelectionSummary();
-  });
-  // Regeneration toggles.
-  $('showDoneEpisodes').checked = !!settings.showDoneEpisodes;
-  $('includeExisting').checked = !!settings.includeExisting;
-  updateStudioHints();
-  $('showDoneEpisodes').addEventListener('change', async () => {
-    await persist({ showDoneEpisodes: $('showDoneEpisodes').checked });
-    updateStudioHints();
-    await loadEpisodes();
-  });
-  $('includeExisting').addEventListener('change', async () => {
-    await persist({ includeExisting: $('includeExisting').checked });
-    updateStudioHints();
-    renderSections(); // re-render (enables/disables already-voiced rows) — no refetch
-  });
-  if (!isStandaloneMode() && !isGatewayMode()) await initStudio();
 }
 
 function renderProviderOptions() {
@@ -207,14 +161,10 @@ function isGatewayMode() {
 }
 
 function renderWorkingMode() {
-  const mode = settings?.mode || 'studio';
+  const mode = settings?.mode || 'standalone';
   $('workingMode').value = mode;
-  const standalone = mode === 'standalone';
-  const gateway = mode === 'gateway';
-  $('studioPane').hidden = standalone || gateway;
-  $('studioBatchActions').hidden = standalone || gateway;
-  $('standalonePane').hidden = !standalone;
-  $('gatewayPane').hidden = !gateway;
+  $('standalonePane').hidden = mode !== 'standalone';
+  $('gatewayPane').hidden = mode !== 'gateway';
 }
 
 async function changeWorkingMode() {
@@ -225,21 +175,12 @@ async function changeWorkingMode() {
     status('Standalone mode uses a local script and Downloads.');
     return;
   }
-  if (isGatewayMode()) {
-    status('Gateway worker mode — configure in Options.');
-    return;
-  }
-  await initStudio();
+  if (isGatewayMode()) status('Gateway worker mode — configure in Options.');
 }
 
 // Persist a settings patch and keep our local copy in sync.
 async function persist(patch) {
   settings = await saveSettings(patch);
-}
-
-function updateStudioHints() {
-  const eh = $('episodeHint');
-  if (eh) eh.textContent = settings.showDoneEpisodes ? '(all episodes with a script)' : '(script done, audio missing)';
 }
 
 // Show provider-specific UI bits (auto-tag is a fish.audio-only feature).
@@ -603,314 +544,6 @@ function costPhrase() {
   return PROVIDERS[currentProvider()]?.quotaCopy || 'uses your provider quota';
 }
 
-// ── Story Studio workflow ──────────────────────────────────────────────────
-//
-// We do NOT pre-check /auth/me. On localhost the Story Studio server bypasses
-// auth for loopback requests, so no login is needed at all — and /auth/me
-// (a public endpoint that always checks the cookie) would wrongly 401 and
-// force a needless login prompt. Instead we just load the data; only a real
-// 401 from a data call (a remote/tailnet server) shows the login form.
-async function initStudio() {
-  client = new StudioClient(settings.studioBaseUrl);
-  try {
-    await loadStudioData();
-  } catch (e) {
-    if (e.status !== 401) {
-      const url = settings.studioBaseUrl || '';
-      const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url);
-      const hint = local ? 'is it running?' : 'is it running, did you Grant access + log in (Settings)?';
-      status(`Can't reach Story Studio at ${url} — ${hint} (${e.message})`);
-      return;
-    }
-    // A real 401 means a remote server that needs a login. Use the credentials
-    // saved in Settings (localhost never reaches here — it bypasses auth).
-    const cred = await getCredentials();
-    if (!cred.username || !cred.password) {
-      status('This server needs a login — add it in Settings (⚙).');
-      return;
-    }
-    try {
-      status('Signing in…');
-      await client.login(cred.username, cred.password);
-      await loadStudioData();
-      status('');
-    } catch {
-      status('Saved login was rejected — update it in Settings (⚙).');
-    }
-  }
-}
-
-// Per-project episode list cache (storage). Avoids re-scanning large projects
-// on every popup open. Fresh for EP_TTL; invalidated after we generate audio.
-const EP_TTL = 5 * 60 * 1000;
-
-async function fetchEpisodes(slug, force = false) {
-  if (!force) {
-    const { epCache = {} } = await chrome.storage.local.get('epCache');
-    const hit = epCache[slug];
-    if (hit && Date.now() - hit.ts < EP_TTL) return hit.episodes;
-  }
-  const raw = await client.listEpisodes(slug);
-  const episodes = Array.isArray(raw) ? raw : raw.episodes || [];
-  const { epCache = {} } = await chrome.storage.local.get('epCache');
-  epCache[slug] = { ts: Date.now(), episodes };
-  await chrome.storage.local.set({ epCache });
-  return episodes;
-}
-
-async function invalidateEpisodes(slug) {
-  const { epCache = {} } = await chrome.storage.local.get('epCache');
-  delete epCache[slug];
-  await chrome.storage.local.set({ epCache });
-}
-
-// Populate the project dropdown (cheap — just a manifest read) and lazily load
-// episodes for the selected project only. No more scanning every project.
-async function loadStudioData() {
-  const projects = await client.listProjects();
-  const sel = $('project');
-  sel.innerHTML = '';
-  for (const p of projects) {
-    const opt = document.createElement('option');
-    opt.value = p.slug;
-    opt.textContent = p.name || p.slug;
-    sel.appendChild(opt);
-  }
-  if (!projects.length) {
-    status('No projects found.');
-    return;
-  }
-  if (settings.lastProject && projects.some((p) => p.slug === settings.lastProject)) {
-    sel.value = settings.lastProject;
-  }
-  sel.onchange = () => {
-    persist({ lastProject: sel.value });
-    loadEpisodes();
-  };
-  await loadEpisodes();
-}
-
-async function loadEpisodes() {
-  const slug = $('project').value;
-  ctx.projectSlug = slug;
-  ctx.project = $('project').selectedOptions[0]?.textContent || slug;
-  status('Loading episodes…');
-  episodesByProject[slug] = await fetchEpisodes(slug);
-  const eps = (episodesByProject[slug] || []).filter(isEligible);
-  const sel = $('episode');
-  sel.innerHTML = '';
-  for (const ep of eps) {
-    const code = ep.episode_code || ep.code || '';
-    const opt = document.createElement('option');
-    opt.value = code;
-    opt.dataset.title = ep.title || '';
-    opt.dataset.hasIntro = ep.status?.introduction ? '1' : '';
-    opt.textContent = `${code} ${ep.title || ''}`.trim();
-    sel.appendChild(opt);
-  }
-  if (settings.lastEpisode && [...sel.options].some((o) => o.value === settings.lastEpisode)) {
-    sel.value = settings.lastEpisode;
-  }
-  sel.onchange = () => {
-    persist({ lastEpisode: sel.value });
-    loadSections();
-  };
-  if (eps.length) {
-    status('');
-    fetchEpisodeAudioCounts(slug, eps); // lazily annotate each option with done/total
-    await loadSections();
-  } else {
-    currentSections = [];
-    renderSections();
-    status('No episodes in this project need audio. 🎉');
-  }
-}
-
-// Lazily append each episode's audio progress (`· done/total ✓`) to its dropdown
-// label, so you can see which episodes are fully voiced without opening each.
-// Throttled + abortable — a new project/episode reload bumps the run token.
-let epCountRun = 0;
-async function fetchEpisodeAudioCounts(slug, eps) {
-  const run = ++epCountRun;
-  const sel = $('episode');
-  for (const ep of eps) {
-    if (run !== epCountRun) return;
-    const code = ep.episode_code || ep.code || '';
-    const opt = [...sel.options].find((o) => o.value === code);
-    if (!opt) continue;
-    try {
-      const a = await client.audioStatus(slug, code);
-      const total = a.total ?? (a.present ?? 0) + (a.missing ?? (a.missing_files || []).length);
-      const done = a.present ?? Math.max(0, total - (a.missing ?? (a.missing_files || []).length));
-      if (total) {
-        const base = `${code} ${opt.dataset.title || ''}`.trim();
-        opt.textContent = `${base} · ${done}/${total}${done >= total ? ' ✓' : ''}`;
-      }
-    } catch {
-      /* episode without an audio manifest yet — leave the plain label */
-    }
-    await new Promise((r) => setTimeout(r, 120));
-  }
-}
-
-// Load the episode's sections into the multi-select list. Missing-audio
-// sections come from audio-status (authoritative); chapter titles + the full
-// list come from chapter-list. Already-voiced sections are shown with a badge
-// (selectable only in "include existing / re-voice" mode).
-async function loadSections() {
-  const slug = ctx.projectSlug;
-  const epOpt = $('episode').selectedOptions[0];
-  ctx.episodeCode = epOpt?.value || '';
-  ctx.episodeTitle = epOpt?.dataset.title || '';
-  const hasIntro = epOpt?.dataset.hasIntro === '1';
-  status('Loading chapters…');
-  try {
-    const [audio, chapterRows] = await Promise.all([
-      client.audioStatus(slug, ctx.episodeCode),
-      client.chapterList(slug, ctx.episodeCode, ctx.episodeTitle).catch(() => ({ chapters: [] })),
-    ]);
-
-    // audio-status.missing_files is authoritative. Map every missing file back
-    // to its section (a chunked chapter shows up as several _partN files that
-    // all belong to one section) and never drop an unrecognised name.
-    const missing = new Set();
-    for (const f of audio.missing_files || []) {
-      const sec = sectionSlugFromFile(f, ctx.episodeCode);
-      if (sec) missing.add(sec);
-    }
-
-    const titles = {};
-    const chapNums = new Set();
-    for (const c of chapterRows.chapters || chapterRows || []) {
-      const n = c.number ?? c.chapterNumber;
-      if (n == null || c.present === false) continue;
-      titles[n] = c.title || c.label;
-      chapNums.add(n);
-    }
-    for (const s of missing) {
-      const m = s.match(/^Chapter_(\d+)$/);
-      if (m) chapNums.add(parseInt(m[1], 10));
-    }
-
-    const cand = [];
-    const seen = new Set();
-    if (missing.has('Script')) {
-      cand.push({ slug: 'Script', kind: 'script', num: null, label: 'Script', supported: true, reason: '' });
-      seen.add('Script');
-    }
-    if (hasIntro || missing.has('Introduction')) {
-      cand.push({ slug: 'Introduction', kind: 'intro', num: null, label: 'Introduction' });
-      seen.add('Introduction');
-    }
-    for (const num of [...chapNums].sort((a, b) => a - b)) {
-      const slug = `Chapter_${pad(num)}`;
-      cand.push({ slug, kind: 'chapter', num, label: `${pad(num)} ${titles[num] || `Chapter ${num}`}`, supported: true, reason: '' });
-      seen.add(slug);
-    }
-    // Any missing section that isn't the intro or a Chapter_NN still gets a row
-    // — a generatable oddity beats a hidden, stuck "missing" count.
-    for (const s of missing) {
-      if (seen.has(s)) continue;
-      seen.add(s);
-      const eligibility = sectionEligibility(s);
-      cand.push({ slug: s, kind: eligibility.kind, num: eligibility.chapterNumber, label: s.replace(/_/g, ' '), supported: eligibility.supported, reason: eligibility.reason });
-    }
-    for (const s of cand) s.present = !missing.has(s.slug);
-    currentSections = cand;
-    renderSections();
-    status('');
-  } catch (e) {
-    currentSections = [];
-    renderSections();
-    status(`Could not load chapters: ${e.message || e}`);
-  }
-}
-
-// Render the section checkboxes. Missing-audio rows are pre-checked; already
-// voiced rows show a ✓ badge and are only selectable when re-voice is on.
-function renderSections() {
-  const wrap = $('sectionList');
-  wrap.innerHTML = '';
-  if (!currentSections.length) {
-    wrap.innerHTML = '<div class="empty">No chapters with a script found.</div>';
-    updateSelectionSummary();
-    return;
-  }
-  const includeExisting = !!settings.includeExisting;
-  for (const s of currentSections) {
-    const row = document.createElement('div');
-    row.className = 'sec' + (s.present ? ' done' : '');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.dataset.slug = s.slug;
-    cb.checked = !s.present && s.supported !== false;
-    cb.disabled = s.supported === false || (s.present && !includeExisting);
-    cb.onchange = updateSelectionSummary;
-    const lab = document.createElement('span');
-    lab.className = 'seclabel';
-    lab.textContent = s.label;
-    row.append(cb, lab);
-    row.title = s.reason || '';
-    if (s.supported === false) {
-      const reason = document.createElement('span');
-      reason.className = 'muted';
-      reason.textContent = s.reason;
-      row.appendChild(reason);
-    }
-    if (s.present) {
-      const b = document.createElement('span');
-      b.className = 'badge';
-      b.textContent = '✓ audio';
-      row.appendChild(b);
-    }
-    wrap.appendChild(row);
-  }
-  updateSelectionSummary();
-}
-
-function selectedSections() {
-  const slugs = new Set(
-    [...$('sectionList').querySelectorAll('input[type=checkbox]')]
-      .filter((c) => c.checked && !c.disabled)
-      .map((c) => c.dataset.slug)
-  );
-  return currentSections.filter((s) => s.supported !== false && slugs.has(s.slug));
-}
-
-function updateSelectionSummary() {
-  const done = currentSections.filter((s) => s.present).length;
-  $('sectionsSummary').textContent = currentSections.length
-    ? `Chapters / Intro — ${done}/${currentSections.length} have audio`
-    : 'Chapters / Intro';
-  const n = selectedSections().length;
-  const btn = $('queueSelected');
-  btn.disabled = n === 0;
-  btn.textContent = n ? `Queue selected (${n})` : 'Queue selected';
-}
-
-// ── Queue ───────────────────────────────────────────────────────────────────
-//
-// All generation goes through the worker's persistent queue (one item at a
-// time, human-paced, survives the panel closing). The panel just builds items
-// — identifiers only; the worker fetches each section's text when it gets to it.
-function itemFromSection(s) {
-  if (s.supported === false) throw new Error(s.reason);
-  const { voice, providerSettings } = queueProviderSnapshot();
-  return {
-    kind: s.kind,
-    slug: ctx.projectSlug,
-    episodeCode: ctx.episodeCode,
-    episodeTitle: ctx.episodeTitle,
-    sectionSlug: s.slug,
-    chapterNumber: s.num ?? null,
-    provider: currentProvider(),
-    voice,
-    autoTag: $('autoTag').checked,
-    providerSettings,
-    label: `${ctx.episodeCode} ${s.label}`,
-  };
-}
-
 function queueProviderSnapshot() {
   const provider = currentProvider();
   return snapshotProviderJob(provider, currentProviderSettings(), providerInventories[provider], $('voice').value, supportsModels(provider) ? $('vsModel').value : '');
@@ -919,23 +552,6 @@ function queueProviderSnapshot() {
 const NORESP = 'no response from the background — reload the extension at chrome://extensions';
 const skipNote = (r) => (r.skipped ? ` (skipped ${r.skipped} already queued)` : '');
 
-// Queue the ticked sections (confirmed first).
-async function onQueueSelected() {
-  const voice = $('voice').value;
-  if (!voice) return status('Pick a voice first (↻ to load).');
-  const sel = selectedSections();
-  if (!sel.length) return status('Tick at least one chapter.');
-  const ok = await confirmDialog(
-    `Queue ${sel.length} chapter${sel.length > 1 ? 's' : ''} from ${ctx.episodeCode}?`,
-    `Generates with ${currentProvider()} — ${costPhrase()}.`,
-    'Queue'
-  );
-  if (!ok) return;
-  persist(rememberVoice(voice));
-  const items = sel.map(itemFromSection);
-  const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
-  status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
-}
 
 function parseStandaloneScripts(value) {
   return String(value || '')
@@ -987,7 +603,6 @@ async function onQueueStandalone() {
     autoTag: $('autoTag').checked,
     providerSettings,
     label: standaloneScripts.length > 1 ? `${rawLabel} ${index + 1}` : rawLabel,
-    episodeCode: 'Standalone',
   }));
   await persist(rememberVoice(voice));
   const response = await chrome.runtime.sendMessage({ type: 'enqueue', items });
@@ -996,65 +611,6 @@ async function onQueueStandalone() {
   standaloneScripts = [];
   showStandaloneEditor();
   status(response.added ? `Queued ${response.added} standalone audio file${response.added === 1 ? '' : 's'} for Downloads${skipNote(response)}.` : 'Matching audio is already queued.');
-}
-
-// Queue every missing section of EVERY eligible episode in the project. The
-// worker expands the project (it'd be too many calls to do here).
-async function onQueueProject() {
-  const voice = $('voice').value;
-  if (!voice) return status('Pick a voice first (↻ to load).');
-  if (!ctx.projectSlug) return;
-  const ok = await confirmDialog(
-    `Queue ALL missing audio across "${ctx.project}"?`,
-    `This can be a lot of chapters — generates with ${currentProvider()}, ${costPhrase()}.`,
-    'Queue all'
-  );
-  if (!ok) return;
-  persist(rememberVoice(voice));
-  const snapshot = queueProviderSnapshot();
-  status(`Building a queue for all of ${ctx.project}…`);
-  const r = await chrome.runtime.sendMessage({
-    type: 'enqueueProject',
-    payload: {
-      slug: ctx.projectSlug,
-      provider: currentProvider(),
-      voice: snapshot.voice,
-      autoTag: $('autoTag').checked,
-      providerSettings: snapshot.providerSettings,
-    },
-  });
-  status(
-    r?.ok
-      ? `Queued ${r.added} section(s) across ${r.episodes} episode(s)${skipNote(r)}.`
-      : `Queue failed: ${r?.error || NORESP}`
-  );
-}
-
-// Queue every missing section (intro + chapters) of just the CURRENT episode.
-async function onQueueEpisode() {
-  const voice = $('voice').value;
-  if (!voice) return status('Pick a voice first (↻ to load).');
-  if (!ctx.projectSlug || !ctx.episodeCode) return status('Pick an episode first.');
-  const missing = currentSections.filter((s) => !s.present && s.supported !== false);
-  if (!missing.length) return status('This episode already has all its audio. 🎉');
-  const ok = await confirmDialog(
-    `Queue all ${missing.length} missing section${missing.length > 1 ? 's' : ''} of ${ctx.episodeCode}?`,
-    `Generates with ${currentProvider()} — ${costPhrase()}.`,
-    'Queue'
-  );
-  if (!ok) return;
-  persist(rememberVoice(voice));
-  const items = missing.map(itemFromSection);
-  const r = await chrome.runtime.sendMessage({ type: 'enqueue', items });
-  status(r?.ok ? `Queued ${r.added} from ${ctx.episodeCode}${skipNote(r)}.` : `Queue failed: ${r?.error || NORESP}`);
-}
-
-// Re-pull the current project's episodes + the open episode's chapters/audio
-// status from Story Studio (drops the 5-min cache) — "load script/audio".
-async function onReloadSections() {
-  if (!ctx.projectSlug) return status('Pick a project first.');
-  await invalidateEpisodes(ctx.projectSlug);
-  await loadEpisodes();
 }
 
 // ── Human pace (gap between generations) ─────────────────────────────────────
@@ -1186,7 +742,7 @@ function updateActivityPanel(queue, { done, failed, left, running, state, cls })
   ].filter(Boolean);
   $('activeJobMeta').textContent = current
     ? `${context.join(' · ')}${active ? ' · saving when complete' : ''}`
-    : queue.length ? `${done} saved${failed ? ` · ${failed} failed` : ''}` : 'Choose sections, then queue them.';
+    : queue.length ? `${done} saved${failed ? ` · ${failed} failed` : ''}` : 'Choose scripts, then queue them.';
 
   const total = queue.length;
   const completed = done + failed + (running ? 0.45 : 0);
@@ -1288,18 +844,6 @@ function tickCountdown() {
   status(secs > 0 ? `Waiting ${secs}s before the next generation…` : 'Starting…');
 }
 
-// When the whole queue finishes, refresh the current episode's section list so
-// the ones we just made drop off; always keep the queue UI current.
-async function onQueueChanged(oldQ, newQ) {
-  renderQueueUI();
-  const active = newQ.some((i) => i.status === 'pending' || i.status === 'running');
-  const wasActive = oldQ.some((i) => i.status === 'pending' || i.status === 'running');
-  if (wasActive && !active && ctx.episodeCode) {
-    await invalidateEpisodes(ctx.projectSlug);
-    await loadSections();
-  }
-}
-
 // ── Provider inventory (per provider) ───────────────────────────────────────
 function renderVoices(voices) {
   const sel = $('voice');
@@ -1369,71 +913,3 @@ function confirmDialog(title, body, okText = 'Queue') {
   });
 }
 
-function testedAtLabel(at) {
-  if (Date.now() - at < 60 * 1000) return 'tested just now';
-  return `tested ${new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(at)}`;
-}
-
-function renderConnectionStatus() {
-  const out = $('connStatus');
-  if (!out || !studioConnectionTest || studioConnectionTest.url !== settings?.studioBaseUrl) return;
-  const connected = studioConnectionTest.state === 'connected';
-  $('openStudioSettings').hidden = connected;
-  const text = `${connected ? 'Connected' : 'Failed'} · ${testedAtLabel(studioConnectionTest.at)}`;
-  out.textContent = text;
-  out.title = studioConnectionTest.detail || '';
-  out.setAttribute('aria-label', studioConnectionTest.detail ? `${text}. ${studioConnectionTest.detail}` : text);
-  out.classList.toggle('connected', connected);
-  out.classList.toggle('failed', !connected);
-}
-
-async function restoreConnectionStatus() {
-  const stored = await chrome.storage.session.get(STUDIO_CONNECTION_TEST_KEY);
-  studioConnectionTest = stored[STUDIO_CONNECTION_TEST_KEY] || null;
-  renderConnectionStatus();
-}
-
-async function recordConnectionTest(state, detail) {
-  studioConnectionTest = { state, detail, at: Date.now(), url: settings.studioBaseUrl };
-  await chrome.storage.session.set({ [STUDIO_CONNECTION_TEST_KEY]: studioConnectionTest });
-  renderConnectionStatus();
-}
-
-// Panel connection test — verifies the whole chain from where you work.
-async function testConnection() {
-  const out = $('connStatus');
-  const button = $('testConn');
-  button.disabled = true;
-  $('openStudioSettings').hidden = true;
-  out.textContent = 'Testing…';
-  out.title = '';
-  out.removeAttribute('aria-label');
-  out.classList.remove('connected', 'failed');
-  try {
-    const url = settings.studioBaseUrl || '';
-    const local = /localhost|127\.0\.0\.1/.test(url);
-    if (!local) {
-      let pat = null;
-      try {
-        const u = new URL(url);
-        pat = `${u.protocol}//${u.hostname}/*`;
-      } catch {
-        /* invalid url */
-      }
-      const granted = pat ? await chrome.permissions.contains({ origins: [pat] }).catch(() => false) : false;
-      if (!granted) {
-        await recordConnectionTest('failed', 'No host access. Open Settings and grant access.');
-        return;
-      }
-    }
-    const projects = await client.listProjects();
-    const n = Array.isArray(projects) ? projects.length : (projects.projects || []).length;
-    await recordConnectionTest('connected', `${n} project${n !== 1 ? 's' : ''} available`);
-    await loadStudioData(); // refresh dropdowns now that we're reachable
-  } catch (e) {
-    const local = /localhost|127\.0\.0\.1/.test(settings.studioBaseUrl || '');
-    await recordConnectionTest('failed', `${e.message}. ${local ? 'Running?' : 'Running, granted, logged in?'}`);
-  } finally {
-    button.disabled = false;
-  }
-}
