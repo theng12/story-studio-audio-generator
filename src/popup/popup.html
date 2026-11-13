@@ -67,12 +67,14 @@
     </label>
 
     <section id="gatewayPane" hidden>
+      <div class="section-head"><div class="section-title">Connection</div></div>
       <p id="gatewayRelayState" class="muted" aria-live="polite"></p>
       <p class="muted">Gateway supplies each script, model and voice. Enable the connection in Settings. A compatible audio worker server is required.</p>
       <p id="gatewayStatus" role="status" aria-live="polite">Connection has not been checked.</p>
       <button id="retryGatewayDelivery" hidden>Deliver retained audio</button>
     </section>
 
+    <div class="section-head"><div class="section-title">Generate</div></div>
     <div class="form-grid form-grid-setup">
       <label>Provider
         <select id="provider">

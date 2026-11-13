@@ -2,6 +2,9 @@
 
 Older releases are in `git log`.
 
+## 0.7.36 — 2026-11-13
+- The side panel now uses the same system as the image panel: a 4/8/12/16 spacing scale, 32 px controls, 10 px radii, 13 px body text, single-column full-width fields, and section titles for Connection and Generate. Behaviour, ids and measured colours are unchanged.
+
 ## 0.7.35 — 2026-11-13
 - Contrast and layering pass: the light accent is now a darker sky (#0369a1) so link and accent text reaches 5.9:1 on white, the dark primary button uses dark text for 7.9:1, and borders separate at both appearances.
 
