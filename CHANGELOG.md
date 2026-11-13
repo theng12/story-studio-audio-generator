@@ -2,6 +2,9 @@
 
 Older releases are in `git log`.
 
+## 0.7.35 — 2026-11-13
+- Contrast and layering pass: the light accent is now a darker sky (#0369a1) so link and accent text reaches 5.9:1 on white, the dark primary button uses dark text for 7.9:1, and borders separate at both appearances.
+
 ## 0.7.34 — 2026-11-13
 - The Gateway pane says "Connected through Relay · <machine>" when Relay seeded this browser and shows the shared readiness reason when Flow is not ready.
 
