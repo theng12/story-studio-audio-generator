@@ -2,6 +2,9 @@
 
 Older releases are in `git log`.
 
+## 0.7.34 — 2026-11-13
+- The Gateway pane says "Connected through Relay · <machine>" when Relay seeded this browser and shows the shared readiness reason when Flow is not ready.
+
 ## 0.7.33 — 2026-11-13
 - The manifest carries a fixed key, so the extension id and its storage survive versioned folders.
 

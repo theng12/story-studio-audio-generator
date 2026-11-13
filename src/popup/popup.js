@@ -108,6 +108,30 @@ async function init() {
     $('gatewayStatus').textContent = state?.error || (state?.phase === 'generating' ? 'Generating audio for Gateway.' : state?.phase === 'uploading' ? 'Delivering retained audio to Gateway.' : state?.lastJob ? 'Audio delivered to Gateway.' : state?.idle ? 'Waiting for Gateway audio jobs.' : 'Connection has not been checked.') + (state?.balance ? ` Balance: ${state.balance}.` : '');
     $('retryGatewayDelivery').hidden = !state?.held || !state?.jobId;
   };
+  let gatewayRelay = { machineId: '', readiness: null, connection: {} };
+  const renderGatewayRelayState = () => {
+    const el = $('gatewayRelayState');
+    if (!el) return;
+    const connection = gatewayRelay.connection || {};
+    const connected = !!(connection.gatewayBaseUrl && connection.gatewayWorkerId && connection.gatewayWorkerToken);
+    const blocked = connected && gatewayRelay.readiness && gatewayRelay.readiness.ready === false;
+    el.textContent = connected
+      ? blocked
+        ? `Connected through Relay · ${gatewayRelay.readiness.reason || 'Flow is not ready'}`
+        : gatewayRelay.machineId ? `Connected through Relay · ${gatewayRelay.machineId}` : 'Connected'
+      : (gatewayRelay.readiness && gatewayRelay.readiness.ready === false && gatewayRelay.readiness.reason) || 'Not connected';
+    el.className = connected && !blocked ? 'ok' : 'muted';
+  };
+  const loadGatewayRelayState = async () => {
+    const stored = await chrome.storage.local.get(['gatewayRelayMachineId', 'gatewayReadiness', 'gatewayBaseUrl', 'gatewayWorkerId', 'gatewayWorkerToken']);
+    gatewayRelay = {
+      machineId: stored.gatewayRelayMachineId || '',
+      readiness: stored.gatewayReadiness || null,
+      connection: { gatewayBaseUrl: stored.gatewayBaseUrl, gatewayWorkerId: stored.gatewayWorkerId, gatewayWorkerToken: stored.gatewayWorkerToken },
+    };
+    renderGatewayRelayState();
+  };
+  await loadGatewayRelayState();
   renderGatewayStatus((await chrome.storage.local.get('gatewayStatus')).gatewayStatus);
   $('retryGatewayDelivery').onclick = async () => {
     const button = $('retryGatewayDelivery');
@@ -120,6 +144,9 @@ async function init() {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.gatewayStatus) renderGatewayStatus(changes.gatewayStatus.newValue);
+    if (changes.gatewayRelayMachineId || changes.gatewayReadiness || changes.gatewayBaseUrl || changes.gatewayWorkerId || changes.gatewayWorkerToken) {
+      loadGatewayRelayState().catch(() => {});
+    }
     if (changes.lastStatus) {
       liveStatus = changes.lastStatus.newValue || null;
       applyLiveStatus();
