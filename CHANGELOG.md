@@ -2,6 +2,9 @@
 
 Older releases are in `git log`.
 
+## 0.7.32 — 2026-11-13
+- Gateway mode can reach the Gateway again: the loopback host permissions are restored, and a test fails if Gateway mode ships without them.
+
 ## 0.7.31 — 2026-11-13
 
 - Only two modes remain: Standalone (the default) and Gateway Studio. The old Story Studio mode and its connection settings are gone.

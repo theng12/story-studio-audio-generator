@@ -1,14 +1,26 @@
 {
   "manifest_version": 3,
   "name": "Story Studio Audio Generator",
-  "version": "0.7.31",
+  "version": "0.7.32",
   "description": "Generate organized narration audio from Story Studio KH scripts through compatible web sessions.",
-  "permissions": ["downloads", "storage", "tabs", "sidePanel", "alarms"],
+  "permissions": [
+    "downloads",
+    "storage",
+    "tabs",
+    "sidePanel",
+    "alarms"
+  ],
   "host_permissions": [
     "https://fish.audio/*",
-    "https://elevenlabs.io/*"
+    "https://elevenlabs.io/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "http://[::1]/*"
   ],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
@@ -28,25 +40,45 @@
   "options_page": "src/options/options.html",
   "content_scripts": [
     {
-      "matches": ["https://fish.audio/*"],
-      "js": ["src/content/bridge-main.js", "src/content/fish-main.js"],
+      "matches": [
+        "https://fish.audio/*"
+      ],
+      "js": [
+        "src/content/bridge-main.js",
+        "src/content/fish-main.js"
+      ],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://fish.audio/*"],
-      "js": ["src/content/bridge-isolated.js", "src/content/fish.js"],
+      "matches": [
+        "https://fish.audio/*"
+      ],
+      "js": [
+        "src/content/bridge-isolated.js",
+        "src/content/fish.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://elevenlabs.io/*"],
-      "js": ["src/content/bridge-main.js", "src/content/eleven-main.js"],
+      "matches": [
+        "https://elevenlabs.io/*"
+      ],
+      "js": [
+        "src/content/bridge-main.js",
+        "src/content/eleven-main.js"
+      ],
       "world": "MAIN",
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://elevenlabs.io/*"],
-      "js": ["src/content/bridge-isolated.js", "src/content/eleven.js"],
+      "matches": [
+        "https://elevenlabs.io/*"
+      ],
+      "js": [
+        "src/content/bridge-isolated.js",
+        "src/content/eleven.js"
+      ],
       "run_at": "document_idle"
     }
   ],
