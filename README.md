@@ -1,5 +1,7 @@
 # Story Studio Audio Generator
 
+<img src="assets/icon.png" width="96" alt="Story Studio Audio Generator icon" />
+
 A Chrome extension for turning scripts into organized audio files.
 
 ## What It Does
@@ -35,6 +37,18 @@ Gateway Studio pairs the extension with Gateway Studio KH as an outbound worker:
 - Readiness is never inferred from a live process, and a missing observation keeps the claim
   refused rather than guessed.
 - Browser TTS is outside this extension and stays optional and off.
+
+## Screenshots
+
+The side panel while a batch runs: the active batch with its progress, the queue with each
+script's status, and the mode and provider controls underneath.
+
+![Side panel generating a batch, with the queue below](docs/screenshots/panel-queue-light.png)
+
+![The same queue in the dark theme](docs/screenshots/panel-queue-dark.png)
+
+The panel before anything is queued is also available:
+[side panel in its idle state](docs/screenshots/panel-idle-light.png).
 
 ## Install
 
