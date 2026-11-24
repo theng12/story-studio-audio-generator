@@ -2,6 +2,9 @@
 
 Older releases are in `git log`.
 
+## 0.7.37 — 2026-11-24
+- The Settings page's Gateway block is a card again, so its opt-in checkbox sits on the same line as its label instead of stretching across the page on a line of its own. Nothing about the setting itself changed.
+
 ## 0.7.36 — 2026-11-13
 - The side panel now uses the same system as the image panel: a 4/8/12/16 spacing scale, 32 px controls, 10 px radii, 13 px body text, single-column full-width fields, and section titles for Connection and Generate. Behaviour, ids and measured colours are unchanged.
 
