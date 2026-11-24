@@ -43,12 +43,13 @@ Gateway Studio pairs the extension with Gateway Studio KH as an outbound worker:
 The side panel while a batch runs: the active batch with its progress, the queue with each
 script's status, and the mode and provider controls underneath.
 
-![Side panel generating a batch, with the queue below](docs/screenshots/panel-queue-light.png)
+![Side panel generating a batch: the active batch with its progress, the queue with each script's status, and the mode and provider controls below](docs/screenshots/panel-queue-light.png)
 
-![The same queue in the dark theme](docs/screenshots/panel-queue-dark.png)
+![The same work queue in the dark theme](docs/screenshots/panel-queue-dark.png)
 
-The panel before anything is queued is also available:
-[side panel in its idle state](docs/screenshots/panel-idle-light.png).
+Also available: [the side panel in its idle state, before anything is
+queued](docs/screenshots/panel-idle-light.png), and [the Settings page, where the theme and the
+opt-in Gateway worker are configured](docs/screenshots/settings-light.png).
 
 ## Install
 
